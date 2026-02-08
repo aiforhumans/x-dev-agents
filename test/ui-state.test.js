@@ -149,12 +149,14 @@ function buildAppContext(storageSeed = {}) {
   ];
   const elements = Object.fromEntries(ids.map((id) => [id, createElement()]));
   const nodeGroups = [
-    createElement({ groupName: "identity" }),
+    createElement({ groupName: "basics" }),
     createElement({ groupName: "model" }),
-    createElement({ groupName: "generation" }),
-    createElement({ groupName: "prompt" }),
+    createElement({ groupName: "sampling" }),
+    createElement({ groupName: "output" }),
+    createElement({ groupName: "runtime" }),
+    createElement({ groupName: "webSearch" }),
     createElement({ groupName: "mcp" }),
-    createElement({ groupName: "runtime" })
+    createElement({ groupName: "diagnostics" })
   ];
 
   const scriptPath = path.join(process.cwd(), "public", "app.js");
@@ -217,12 +219,14 @@ test("default node group state is applied when no localStorage value exists", as
 
   const states = Object.fromEntries(nodeGroups.map((group) => [group.dataset.group, group.open]));
   assert.deepEqual(states, {
-    identity: true,
+    basics: true,
     model: true,
-    generation: false,
-    prompt: false,
+    sampling: false,
+    output: false,
+    runtime: false,
+    webSearch: false,
     mcp: false,
-    runtime: false
+    diagnostics: false
   });
 });
 
@@ -234,12 +238,40 @@ test("invalid stored node group state falls back to defaults", async () => {
 
   const states = Object.fromEntries(nodeGroups.map((group) => [group.dataset.group, group.open]));
   assert.deepEqual(states, {
-    identity: true,
+    basics: true,
     model: true,
-    generation: false,
-    prompt: false,
+    sampling: false,
+    output: false,
+    runtime: false,
+    webSearch: false,
     mcp: false,
-    runtime: false
+    diagnostics: false
+  });
+});
+
+test("legacy stored group keys are mapped to the new group schema", async () => {
+  const { nodeGroups } = buildAppContext({
+    "ui.agentForm.groupState.agent-1": JSON.stringify({
+      identity: false,
+      model: false,
+      generation: true,
+      prompt: true,
+      runtime: true,
+      mcp: true
+    })
+  });
+  await flushAsyncWork();
+
+  const states = Object.fromEntries(nodeGroups.map((group) => [group.dataset.group, group.open]));
+  assert.deepEqual(states, {
+    basics: true,
+    model: false,
+    sampling: true,
+    output: true,
+    runtime: true,
+    webSearch: true,
+    mcp: true,
+    diagnostics: false
   });
 });
 

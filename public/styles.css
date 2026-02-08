@@ -17,6 +17,7 @@
 
 html,
 body {
+  height: 100%;
   min-height: 100%;
 }
 
@@ -31,6 +32,11 @@ body {
   max-width: min(96vw, 1760px);
   margin: 0 auto;
   padding: 1rem;
+  min-height: 100vh;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
 h1,
@@ -74,6 +80,7 @@ p {
   gap: 1rem;
   padding: 0.85rem 0.95rem;
   margin-bottom: 0.9rem;
+  flex-shrink: 0;
 }
 
 .hero-copy {
@@ -105,6 +112,8 @@ p {
   grid-template-columns: minmax(360px, var(--left-pane-width)) var(--resizer-width) minmax(560px, 1fr);
   gap: 0.75rem;
   align-items: stretch;
+  flex: 1 1 auto;
+  min-height: 0;
 }
 
 .layout.resizing,
@@ -142,18 +151,22 @@ p {
 }
 
 .agents-panel {
-  min-height: calc(100vh - 170px);
   display: flex;
   flex-direction: column;
   padding: 0.9rem;
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
 }
 
 .chat-panel {
-  min-height: calc(100vh - 170px);
   display: flex;
   flex-direction: column;
   padding: 0.9rem;
   background: #1b1b1b;
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
 }
 
 .chat-shell {
@@ -161,6 +174,8 @@ p {
   flex-direction: column;
   min-height: 0;
   flex: 1;
+  gap: 0.6rem;
+  position: relative;
 }
 
 .chat-panel-head {
@@ -329,6 +344,7 @@ button.danger {
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
+  flex: 1 1 auto;
   min-height: 0;
   overflow: auto;
   padding-right: 0.2rem;
@@ -379,6 +395,24 @@ button.danger {
   padding-top: 0.4rem;
 }
 
+.node-help {
+  font-size: 0.74rem;
+  color: #b3b3b3;
+  margin-bottom: 0.5rem;
+}
+
+.agent-last-stats {
+  margin: 0;
+  white-space: pre-wrap;
+  font-family: "Manrope", "Segoe UI", sans-serif;
+  font-size: 0.72rem;
+  color: #c0c0c0;
+  padding: 0.5rem 0.55rem;
+  border: 1px solid #3a3a3a;
+  border-radius: 8px;
+  background: #232323;
+}
+
 .toggle-row {
   display: flex;
   flex-direction: column;
@@ -413,8 +447,9 @@ button.danger {
   border-radius: 12px;
   padding: 0.6rem 0.3rem 0.8rem;
   background: transparent;
-  min-height: 360px;
-  max-height: 65vh;
+  min-height: 0;
+  flex: 1 1 auto;
+  max-height: none;
   overflow: auto;
   scrollbar-width: none;
   -ms-overflow-style: none;
@@ -439,6 +474,33 @@ button.danger {
   padding: 0;
   background: transparent;
   max-width: 880px;
+}
+
+.message-collapsible {
+  width: 100%;
+  border: 1px solid #404040;
+  background: #252525;
+  padding: 0.2rem 0.65rem 0.55rem;
+}
+
+.message-collapsible summary {
+  list-style: none;
+  cursor: pointer;
+  padding: 0.34rem 0;
+}
+
+.message-collapsible summary::-webkit-details-marker {
+  display: none;
+}
+
+.message-collapsible summary .meta {
+  margin-bottom: 0;
+}
+
+.message-code pre {
+  font-family: "Consolas", "SFMono-Regular", "Menlo", monospace;
+  font-size: 0.84rem;
+  line-height: 1.4;
 }
 
 .message.user {
@@ -496,11 +558,93 @@ button.danger {
 }
 
 .chat-form {
-  margin-top: auto;
+  flex-shrink: 0;
   border: 1px solid var(--border);
   border-radius: 14px;
   padding: 0.6rem 0.62rem;
   background: #202020;
+}
+
+.scroll-bottom-btn {
+  position: absolute;
+  right: 0.9rem;
+  bottom: 5.25rem;
+  z-index: 2;
+  border-radius: 999px;
+  padding: 0.3rem 0.7rem;
+  font-size: 0.72rem;
+  border: 1px solid #4d4d4d;
+  background: rgba(36, 36, 36, 0.95);
+}
+
+.attachment-preview {
+  display: flex;
+  gap: 0.45rem;
+  flex-wrap: wrap;
+  margin-top: 0.45rem;
+}
+
+.attachment-card {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  min-width: 0;
+  max-width: 320px;
+  border: 1px solid #3a3a3a;
+  border-radius: 10px;
+  padding: 0.25rem 0.35rem;
+  background: #262626;
+}
+
+.attachment-thumb {
+  width: 34px;
+  height: 34px;
+  border-radius: 6px;
+  overflow: hidden;
+  border: 1px solid #3f3f3f;
+  background: #1f1f1f;
+  flex: 0 0 auto;
+}
+
+.attachment-thumb img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  display: block;
+}
+
+.attachment-thumb-fallback {
+  width: 100%;
+  height: 100%;
+  display: grid;
+  place-items: center;
+  font-size: 0.55rem;
+  color: #a5a5a5;
+}
+
+.attachment-meta {
+  min-width: 0;
+}
+
+.attachment-name {
+  font-size: 0.72rem;
+  color: #dddddd;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.attachment-size {
+  font-size: 0.67rem;
+  color: #9f9f9f;
+}
+
+.attachment-remove-btn {
+  margin-left: auto;
+  border-radius: 999px;
+  padding: 0.2rem 0.5rem;
+  font-size: 0.66rem;
+  border-color: #4b4b4b;
 }
 
 .composer-row {
@@ -567,6 +711,35 @@ button.danger {
   color: #a9a9a9;
 }
 
+.diagnostics {
+  margin-top: 0.42rem;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.34rem;
+}
+
+.diag-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.26rem;
+  border: 1px solid #3b3b3b;
+  border-radius: 999px;
+  padding: 0.16rem 0.46rem;
+  background: #232323;
+  font-size: 0.67rem;
+  color: #afafaf;
+}
+
+.diag-key {
+  color: #8f8f8f;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.diag-value {
+  color: #cecece;
+}
+
 .status {
   margin-top: 0.85rem;
   padding: 0.58rem 0.78rem;
@@ -575,6 +748,7 @@ button.danger {
   border: 1px solid #2f7a63;
   color: #97e6cb;
   font-size: 0.82rem;
+  flex-shrink: 0;
 }
 
 .status.error {
@@ -595,8 +769,16 @@ button.danger {
 }
 
 @media (max-width: 1080px) {
+  .page {
+    height: auto;
+    min-height: 100vh;
+    overflow: visible;
+  }
+
   .layout {
     grid-template-columns: 1fr;
+    flex: 0 0 auto;
+    overflow: visible;
   }
 
   .layout-resizer {
@@ -606,10 +788,16 @@ button.danger {
   .agents-panel,
   .chat-panel {
     min-height: 0;
+    height: auto;
+    overflow: visible;
   }
 
   .chat-log {
     max-height: 56vh;
+  }
+
+  .scroll-bottom-btn {
+    bottom: 4.9rem;
   }
 }
 
@@ -646,5 +834,10 @@ button.danger {
 
   .chat-log {
     min-height: 280px;
+  }
+
+  .scroll-bottom-btn {
+    right: 0.6rem;
+    bottom: 5.1rem;
   }
 }

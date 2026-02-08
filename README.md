@@ -7,9 +7,14 @@ Local web app for creating and testing custom agents backed by the LM Studio API
 - ChatGPT-style UI refresh:
   - wider workspace with a calmer, minimal visual style
   - resizable editor/chat split on desktop (stored locally)
+  - keyboard-accessible resizer controls (`ArrowLeft/ArrowRight`, `Home/End`, `Shift` for larger steps)
   - foldable agent node groups with per-agent open/closed state
-  - compact `+` upload button in the chat composer
+  - updated form information architecture:
+    - `Basics`, `Model`, `Sampling`, `Output`
+    - `Streaming / Store`, `Web Search`, `MCP Integrations`, `Diagnostics`
+  - compact `+` upload button with image preview thumbnails, size labels, and remove actions
   - hidden chat scrollbar with preserved mouse/touch/trackpad scroll behavior
+  - `Jump to latest` control when reading older messages in the thread
 - Create, edit, and delete agents with advanced LM Studio chat settings:
   - `temperature`, `top_p`, `top_k`, `min_p`, `repeat_penalty`
   - `max_output_tokens`, `context_length`, `reasoning`
@@ -23,9 +28,9 @@ Local web app for creating and testing custom agents backed by the LM Studio API
 - Persist agent definitions, chat history, response chain IDs, and stats in `data/`.
 - Render assistant output types from LM Studio:
   - `message`
-  - `reasoning`
-  - `tool_call`
-  - `invalid_tool_call`
+  - `reasoning` (collapsible)
+  - `tool_call` (collapsible monospace block)
+  - `invalid_tool_call` (collapsible monospace block)
 - Show response diagnostics when available (`tokens_per_second`, `time_to_first_token_seconds`, token counts, etc.).
 
 ## Prerequisites
@@ -88,6 +93,7 @@ Open `http://localhost:3000`.
 - Agent editor fold-state is stored per agent:
   - `ui.agentForm.groupState.<agentId>`
   - `ui.agentForm.groupState.__new__` for unsaved new agents.
+- Additional UI behavior details: `docs/ui.md`
 
 ## Tests
 

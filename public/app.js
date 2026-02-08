@@ -5,15 +5,19 @@ const NEW_AGENT_GROUP_KEY = "__new__";
 const MIN_LEFT_PANE_WIDTH = 360;
 const MIN_RIGHT_PANE_WIDTH = 560;
 const DESKTOP_BREAKPOINT = 1080;
+const SMALL_SCREEN_BREAKPOINT = 760;
 const RESIZER_WIDTH = 12;
-const NODE_GROUP_KEYS = ["identity", "model", "generation", "prompt", "mcp", "runtime"];
+const MAX_IMAGE_ATTACHMENT_BYTES = 8 * 1024 * 1024;
+const NODE_GROUP_KEYS = ["basics", "model", "sampling", "output", "runtime", "webSearch", "mcp", "diagnostics"];
 const DEFAULT_GROUP_STATE = {
-  identity: true,
+  basics: true,
   model: true,
-  generation: false,
-  prompt: false,
+  sampling: false,
+  output: false,
+  runtime: false,
+  webSearch: false,
   mcp: false,
-  runtime: false
+  diagnostics: false
 };
 
 const state = {
@@ -23,7 +27,10 @@ const state = {
   selectedAgentId: null,
   chatHistory: [],
   isStreaming: false,
-  leftPaneWidthPx: null
+  leftPaneWidthPx: null,
+  pendingImages: [],
+  attachmentPreviewUrls: [],
+  shouldStickToBottom: true
 };
 
 function queryAll(selector) {
@@ -72,8 +79,11 @@ const elements = {
   chatAttachBtn: document.getElementById("chatAttachBtn"),
   chatMessage: document.getElementById("chatMessage"),
   chatImages: document.getElementById("chatImages"),
+  chatAttachmentPreview: document.getElementById("chatAttachmentPreview"),
   chatAttachmentCount: document.getElementById("chatAttachmentCount"),
+  scrollToBottomBtn: document.getElementById("scrollToBottomBtn"),
   resetChatBtn: document.getElementById("resetChatBtn"),
+  agentLastStats: document.getElementById("agentLastStats"),
   statusBar: document.getElementById("statusBar"),
   nodeGroups: queryAll(".node-group[data-group]")
 };
@@ -129,6 +139,24 @@ function sanitizeGroupState(rawState) {
   const sanitized = { ...DEFAULT_GROUP_STATE };
   if (!rawState || typeof rawState !== "object") {
     return sanitized;
+  }
+
+  // Backward compatibility for older persisted group keys.
+  if (rawState.identity !== undefined) {
+    sanitized.basics = Boolean(rawState.identity);
+  }
+  if (rawState.generation !== undefined) {
+    const generationOpen = Boolean(rawState.generation);
+    sanitized.sampling = generationOpen;
+    sanitized.output = generationOpen;
+  }
+  if (rawState.prompt !== undefined) {
+    sanitized.basics = Boolean(rawState.prompt);
+  }
+  if (rawState.runtime !== undefined) {
+    const runtimeOpen = Boolean(rawState.runtime);
+    sanitized.runtime = runtimeOpen;
+    sanitized.webSearch = runtimeOpen;
   }
 
   for (const key of NODE_GROUP_KEYS) {
@@ -200,12 +228,28 @@ function getLayoutWidth() {
   return elements.layout.getBoundingClientRect().width || 0;
 }
 
+function updateResizerAria(layoutWidth) {
+  if (!elements.layoutResizer || typeof elements.layoutResizer.setAttribute !== "function") {
+    return;
+  }
+  const maxWidth = Math.max(MIN_LEFT_PANE_WIDTH, layoutWidth - MIN_RIGHT_PANE_WIDTH - RESIZER_WIDTH);
+  elements.layoutResizer.setAttribute("aria-valuemin", String(MIN_LEFT_PANE_WIDTH));
+  elements.layoutResizer.setAttribute("aria-valuemax", String(Math.round(maxWidth)));
+  if (Number.isFinite(state.leftPaneWidthPx)) {
+    elements.layoutResizer.setAttribute("aria-valuenow", String(Math.round(state.leftPaneWidthPx)));
+  }
+}
+
 function applyLeftPaneWidth(widthPx) {
   if (!elements.layout || !elements.layout.style || typeof elements.layout.style.setProperty !== "function") {
     return;
   }
   elements.layout.style.setProperty("--left-pane-width", `${Math.round(widthPx)}px`);
   state.leftPaneWidthPx = Math.round(widthPx);
+  const layoutWidth = getLayoutWidth();
+  if (layoutWidth) {
+    updateResizerAria(layoutWidth);
+  }
 }
 
 function loadLeftPaneWidth() {
@@ -237,6 +281,10 @@ function initializeResizableLayout() {
   }
 
   loadLeftPaneWidth();
+  const initialLayoutWidth = getLayoutWidth();
+  if (initialLayoutWidth) {
+    updateResizerAria(initialLayoutWidth);
+  }
 
   const stopDragging = () => {
     elements.layout.classList.remove("resizing");
@@ -278,6 +326,41 @@ function initializeResizableLayout() {
     }
   });
 
+  elements.layoutResizer.addEventListener("keydown", (event) => {
+    if (!isDesktopLayout()) {
+      return;
+    }
+    const layoutWidth = getLayoutWidth();
+    if (!layoutWidth) {
+      return;
+    }
+
+    const currentWidth = Number.isFinite(state.leftPaneWidthPx)
+      ? state.leftPaneWidthPx
+      : clampPaneWidthPx(Math.round(layoutWidth * 0.35), layoutWidth);
+    const fineStep = 24;
+    const coarseStep = 96;
+    let nextWidth = currentWidth;
+
+    if (event.key === "ArrowLeft") {
+      nextWidth = currentWidth - (event.shiftKey ? coarseStep : fineStep);
+    } else if (event.key === "ArrowRight") {
+      nextWidth = currentWidth + (event.shiftKey ? coarseStep : fineStep);
+    } else if (event.key === "Home") {
+      nextWidth = MIN_LEFT_PANE_WIDTH;
+    } else if (event.key === "End") {
+      nextWidth = layoutWidth - MIN_RIGHT_PANE_WIDTH - RESIZER_WIDTH;
+    } else {
+      return;
+    }
+
+    if (typeof event.preventDefault === "function") {
+      event.preventDefault();
+    }
+    applyLeftPaneWidth(clampPaneWidthPx(nextWidth, layoutWidth));
+    saveLeftPaneWidth();
+  });
+
   if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
     window.addEventListener("resize", () => {
       if (!isDesktopLayout()) {
@@ -291,6 +374,7 @@ function initializeResizableLayout() {
         return;
       }
       applyLeftPaneWidth(clampPaneWidthPx(state.leftPaneWidthPx, layoutWidth));
+      updateResizerAria(layoutWidth);
     });
   }
 }
@@ -402,6 +486,7 @@ function resetAgentForm() {
   elements.agentWebSearch.checked = false;
   renderModelOptions();
   elements.deleteAgentBtn.disabled = true;
+  renderAgentDiagnostics(null, null);
 }
 
 function fillAgentForm(agent) {
@@ -430,11 +515,12 @@ function fillAgentForm(agent) {
   elements.agentWebSearch.checked = agent.webSearch === true;
   renderModelOptions(agent.model || "");
   elements.deleteAgentBtn.disabled = false;
+  renderAgentDiagnostics(agent.lastStats || null, agent.lastResponseId || null);
 }
 
-function formatStats(stats) {
+function getStatsEntries(stats) {
   if (!stats || typeof stats !== "object") {
-    return "";
+    return [];
   }
 
   const labels = [
@@ -449,58 +535,183 @@ function formatStats(stats) {
     ["stop_reason", "stop"]
   ];
 
-  const parts = [];
-  for (const [key, label] of labels) {
-    if (stats[key] === null || stats[key] === undefined || stats[key] === "") {
-      continue;
-    }
-    parts.push(`${label}: ${stats[key]}`);
+  return labels
+    .map(([key, label]) => ({ key, label, value: stats[key] }))
+    .filter((entry) => entry.value !== null && entry.value !== undefined && entry.value !== "");
+}
+
+function formatStats(stats) {
+  const entries = getStatsEntries(stats);
+  if (!entries.length) {
+    return "";
   }
-  return parts.join(" | ");
+  return entries.map((entry) => `${entry.label}: ${entry.value}`).join(" | ");
+}
+
+function renderAgentDiagnostics(stats, responseId = null) {
+  if (!elements.agentLastStats) {
+    return;
+  }
+  const sections = [];
+  if (responseId) {
+    sections.push(`response_id: ${responseId}`);
+  }
+  const statsText = formatStats(stats);
+  if (statsText) {
+    sections.push(statsText);
+  }
+  elements.agentLastStats.textContent = sections.length ? sections.join("\n") : "No diagnostics yet.";
+}
+
+function stringifyDisplayValue(value) {
+  if (value === null || value === undefined) {
+    return "";
+  }
+  if (typeof value === "string") {
+    return value;
+  }
+  try {
+    return JSON.stringify(value, null, 2);
+  } catch {
+    return String(value);
+  }
+}
+
+function shouldCollapseDetailsOnSmallScreen() {
+  if (typeof window === "undefined" || typeof window.innerWidth !== "number") {
+    return false;
+  }
+  return window.innerWidth <= SMALL_SCREEN_BREAKPOINT;
+}
+
+function renderDiagnosticsRow(item) {
+  const entries = [];
+
+  if (item.responseId) {
+    entries.push({ label: "response", value: item.responseId });
+  }
+
+  const statsEntries = getStatsEntries(item.stats);
+  entries.push(...statsEntries.map((entry) => ({ label: entry.label, value: entry.value })));
+
+  if (!entries.length) {
+    return "";
+  }
+
+  const chips = entries
+    .map(
+      (entry) =>
+        `<span class="diag-chip"><span class="diag-key">${escapeHtml(entry.label)}</span><span class="diag-value">${escapeHtml(
+          String(entry.value)
+        )}</span></span>`
+    )
+    .join("");
+
+  return `<div class="diagnostics">${chips}</div>`;
 }
 
 function renderMessage(item) {
   const role = String(item.role || "assistant").toLowerCase();
   const safeClass = role.replace(/[^a-z0-9_-]/g, "");
-  const meta = role;
   const content = escapeHtml(item.content || "");
-  const statsText = formatStats(item.stats);
-  const extras = [];
+  const diagnostics = renderDiagnosticsRow(item);
 
-  if (role === "tool_call") {
-    const tool = item.tool ? `tool: ${escapeHtml(item.tool)}` : "";
-    const args =
-      item.arguments !== undefined && item.arguments !== null
-        ? `args: ${escapeHtml(JSON.stringify(item.arguments))}`
-        : "";
-    const out =
-      item.output !== undefined && item.output !== null
-        ? `output: ${escapeHtml(JSON.stringify(item.output))}`
-        : "";
-    const providerInfo =
-      item.providerInfo !== undefined && item.providerInfo !== null
-        ? `provider_info: ${escapeHtml(JSON.stringify(item.providerInfo))}`
-        : "";
-    [tool, args, out, providerInfo].filter(Boolean).forEach((line) => extras.push(`<div>${line}</div>`));
+  if (role === "reasoning") {
+    const open = shouldCollapseDetailsOnSmallScreen() ? "" : " open";
+    return `<details class="message reasoning message-collapsible"${open}>
+      <summary><span class="meta">reasoning</span></summary>
+      <pre>${content}</pre>
+      ${diagnostics}
+    </details>`;
   }
 
-  if (item.responseId) {
-    extras.push(`<div>response_id: ${escapeHtml(item.responseId)}</div>`);
+  if (role === "tool_call" || role === "invalid_tool_call") {
+    const lines = [];
+    if (item.content) {
+      lines.push(`summary: ${stringifyDisplayValue(item.content)}`);
+    }
+    if (item.tool !== undefined && item.tool !== null) {
+      lines.push(`tool: ${stringifyDisplayValue(item.tool)}`);
+    }
+    if (item.arguments !== undefined && item.arguments !== null) {
+      lines.push(`arguments: ${stringifyDisplayValue(item.arguments)}`);
+    }
+    if (item.output !== undefined && item.output !== null) {
+      lines.push(`output: ${stringifyDisplayValue(item.output)}`);
+    }
+    if (item.providerInfo !== undefined && item.providerInfo !== null) {
+      lines.push(`provider_info: ${stringifyDisplayValue(item.providerInfo)}`);
+    }
+    if (item.metadata !== undefined && item.metadata !== null) {
+      lines.push(`metadata: ${stringifyDisplayValue(item.metadata)}`);
+    }
+
+    const metaLabel = role === "tool_call" ? "tool call" : "invalid tool call";
+    const open = shouldCollapseDetailsOnSmallScreen() ? "" : " open";
+    return `<details class="message ${safeClass} message-collapsible message-code"${open}>
+      <summary><span class="meta">${escapeHtml(metaLabel)}</span></summary>
+      <pre>${escapeHtml(lines.join("\n"))}</pre>
+      ${diagnostics}
+    </details>`;
   }
 
   return `<div class="message ${safeClass}">
-    <div class="meta">${escapeHtml(meta)}</div>
+    <div class="meta">${escapeHtml(role)}</div>
     <pre>${content}</pre>
-    ${extras.length ? `<div class="stats">${extras.join("")}</div>` : ""}
-    ${statsText ? `<div class="stats">${escapeHtml(statsText)}</div>` : ""}
+    ${diagnostics}
   </div>`;
 }
 
-function renderChat(history = [], { showTyping = false, streamPreview = "" } = {}) {
+function isNearBottom(element, threshold = 72) {
+  if (!element) {
+    return true;
+  }
+  const remaining = element.scrollHeight - element.scrollTop - element.clientHeight;
+  if (!Number.isFinite(remaining)) {
+    return true;
+  }
+  return remaining <= threshold;
+}
+
+function setScrollButtonVisible(visible) {
+  if (!elements.scrollToBottomBtn) {
+    return;
+  }
+  elements.scrollToBottomBtn.hidden = !visible;
+}
+
+function scrollChatToBottom({ smooth = false } = {}) {
+  if (!elements.chatLog) {
+    return;
+  }
+  if (smooth && typeof elements.chatLog.scrollTo === "function") {
+    elements.chatLog.scrollTo({ top: elements.chatLog.scrollHeight, behavior: "smooth" });
+  } else {
+    elements.chatLog.scrollTop = elements.chatLog.scrollHeight;
+  }
+  state.shouldStickToBottom = true;
+  setScrollButtonVisible(false);
+}
+
+function syncChatScrollState() {
+  if (!elements.chatLog) {
+    return;
+  }
+  state.shouldStickToBottom = isNearBottom(elements.chatLog);
+  setScrollButtonVisible(!state.shouldStickToBottom);
+}
+
+function renderChat(history = [], { showTyping = false, streamPreview = "", forceScroll = false } = {}) {
   state.chatHistory = Array.isArray(history) ? history : [];
+  const wasNearBottom = isNearBottom(elements.chatLog);
 
   if (!state.chatHistory.length && !showTyping) {
     elements.chatLog.innerHTML = '<p class="empty-chat">No conversation yet.</p>';
+    if (forceScroll || state.shouldStickToBottom || wasNearBottom) {
+      scrollChatToBottom();
+    } else {
+      syncChatScrollState();
+    }
     return;
   }
 
@@ -513,19 +724,161 @@ function renderChat(history = [], { showTyping = false, streamPreview = "" } = {
     : "";
 
   elements.chatLog.innerHTML = `${messagesHtml}${typingMarkup}`;
-  elements.chatLog.scrollTop = elements.chatLog.scrollHeight;
+
+  if (forceScroll || state.shouldStickToBottom || wasNearBottom) {
+    scrollChatToBottom();
+  } else {
+    syncChatScrollState();
+  }
 }
 
 function updateAttachmentCount() {
   if (!elements.chatAttachmentCount) {
     return;
   }
-  const count = Array.from(elements.chatImages?.files || []).length;
+  const count = state.pendingImages.length;
   if (!count) {
     elements.chatAttachmentCount.textContent = "";
     return;
   }
   elements.chatAttachmentCount.textContent = count === 1 ? "1 image attached" : `${count} images attached`;
+}
+
+function formatBytes(bytes) {
+  const size = Number(bytes);
+  if (!Number.isFinite(size) || size <= 0) {
+    return "0 B";
+  }
+  if (size < 1024) {
+    return `${size} B`;
+  }
+  if (size < 1024 * 1024) {
+    return `${(size / 1024).toFixed(1)} KB`;
+  }
+  return `${(size / (1024 * 1024)).toFixed(2)} MB`;
+}
+
+function revokeAttachmentPreviewUrls() {
+  if (typeof URL === "undefined" || typeof URL.revokeObjectURL !== "function") {
+    state.attachmentPreviewUrls = [];
+    return;
+  }
+  for (const url of state.attachmentPreviewUrls) {
+    URL.revokeObjectURL(url);
+  }
+  state.attachmentPreviewUrls = [];
+}
+
+function syncPendingImagesToInput() {
+  if (!elements.chatImages || typeof DataTransfer !== "function") {
+    return;
+  }
+
+  try {
+    const transfer = new DataTransfer();
+    for (const file of state.pendingImages) {
+      transfer.items.add(file);
+    }
+    elements.chatImages.files = transfer.files;
+  } catch {
+    // Ignore environments where programmatic FileList assignment is blocked.
+  }
+}
+
+function renderAttachmentPreview() {
+  if (!elements.chatAttachmentPreview) {
+    return;
+  }
+
+  revokeAttachmentPreviewUrls();
+
+  if (!state.pendingImages.length) {
+    elements.chatAttachmentPreview.innerHTML = "";
+    return;
+  }
+
+  const cards = state.pendingImages
+    .map((file, index) => {
+      const safeName = escapeHtml(file.name || `image-${index + 1}`);
+      const sizeText = escapeHtml(formatBytes(file.size));
+      let thumbMarkup = '<span class="attachment-thumb-fallback" aria-hidden="true">IMG</span>';
+
+      if (typeof URL !== "undefined" && typeof URL.createObjectURL === "function") {
+        const objectUrl = URL.createObjectURL(file);
+        state.attachmentPreviewUrls.push(objectUrl);
+        thumbMarkup = `<img src="${escapeHtml(objectUrl)}" alt="" loading="lazy" />`;
+      }
+
+      return `<div class="attachment-card">
+        <div class="attachment-thumb">${thumbMarkup}</div>
+        <div class="attachment-meta">
+          <div class="attachment-name" title="${safeName}">${safeName}</div>
+          <div class="attachment-size">${sizeText}</div>
+        </div>
+        <button class="attachment-remove-btn" type="button" data-index="${index}" aria-label="Remove ${safeName}">Remove</button>
+      </div>`;
+    })
+    .join("");
+
+  elements.chatAttachmentPreview.innerHTML = cards;
+}
+
+function mergePendingImages(files) {
+  const unique = new Map(
+    state.pendingImages.map((file) => [`${file.name}:${file.size}:${file.lastModified}:${file.type}`, file])
+  );
+  let oversized = 0;
+
+  for (const file of files) {
+    if (!file || typeof file !== "object") {
+      continue;
+    }
+    const type = String(file.type || "").toLowerCase();
+    if (!type.startsWith("image/")) {
+      continue;
+    }
+    if (Number(file.size) > MAX_IMAGE_ATTACHMENT_BYTES) {
+      oversized += 1;
+      continue;
+    }
+    const key = `${file.name}:${file.size}:${file.lastModified}:${file.type}`;
+    unique.set(key, file);
+  }
+
+  state.pendingImages = [...unique.values()];
+  syncPendingImagesToInput();
+  updateAttachmentCount();
+  renderAttachmentPreview();
+
+  if (oversized > 0) {
+    const limitText = formatBytes(MAX_IMAGE_ATTACHMENT_BYTES);
+    setStatus(
+      oversized === 1
+        ? `Skipped 1 image larger than ${limitText}.`
+        : `Skipped ${oversized} images larger than ${limitText}.`,
+      true
+    );
+  }
+}
+
+function removePendingImage(index) {
+  if (!Number.isInteger(index) || index < 0 || index >= state.pendingImages.length) {
+    return;
+  }
+  state.pendingImages.splice(index, 1);
+  syncPendingImagesToInput();
+  updateAttachmentCount();
+  renderAttachmentPreview();
+}
+
+function clearPendingImages() {
+  state.pendingImages = [];
+  if (elements.chatImages) {
+    elements.chatImages.value = "";
+  }
+  syncPendingImagesToInput();
+  updateAttachmentCount();
+  renderAttachmentPreview();
 }
 
 function autoResizeChatMessage() {
@@ -796,14 +1149,20 @@ async function loadAgents() {
 async function loadHistory() {
   if (!state.selectedAgentId) {
     elements.chatTitle.textContent = "Agent Chat";
-    renderChat([]);
+    renderChat([], { forceScroll: true });
+    renderAgentDiagnostics(null, null);
     return;
   }
 
   const agent = getSelectedAgent();
   elements.chatTitle.textContent = `Chat: ${agent?.name || "Unknown Agent"}`;
   const payload = await api(`/api/chat/${state.selectedAgentId}/history`);
-  renderChat(payload.history || []);
+  if (agent) {
+    agent.lastStats = payload.lastStats || null;
+    agent.lastResponseId = payload.lastResponseId || null;
+  }
+  renderAgentDiagnostics(payload.lastStats || null, payload.lastResponseId || null);
+  renderChat(payload.history || [], { forceScroll: true });
 }
 
 async function onAgentSelected(id) {
@@ -898,7 +1257,7 @@ async function* streamSse(body) {
   }
 }
 
-async function sendChatNonStreaming(agentId, message, messageParts, optimisticHistory, previousHistory) {
+async function sendChatNonStreaming(agentId, message, messageParts, optimisticHistory, previousHistory, previousPendingImages) {
   try {
     const payload = await api("/api/chat", {
       method: "POST",
@@ -908,19 +1267,60 @@ async function sendChatNonStreaming(agentId, message, messageParts, optimisticHi
         messageParts
       })
     });
-    renderChat(payload.history || optimisticHistory);
+    renderChat(payload.history || optimisticHistory, { forceScroll: true });
+    renderAgentDiagnostics(payload.stats || null, payload.responseId || null);
     setStatus("Response received.");
   } catch (error) {
-    renderChat(previousHistory);
+    renderChat(previousHistory, { forceScroll: true });
     elements.chatMessage.value = message;
+    state.pendingImages = [...previousPendingImages];
+    syncPendingImagesToInput();
+    updateAttachmentCount();
+    renderAttachmentPreview();
     autoResizeChatMessage();
     setStatus(error.message, true);
   }
 }
 
-async function sendChatStreaming(agentId, message, messageParts, optimisticHistory, previousHistory) {
+async function sendChatStreaming(agentId, message, messageParts, optimisticHistory, previousHistory, previousPendingImages) {
   let assistantPreview = "";
   let finalHistory = null;
+  let finalStats = null;
+  let finalResponseId = null;
+  let frameHandle = null;
+  const schedulePreviewRender = () => {
+    if (frameHandle !== null) {
+      return;
+    }
+    const render = () => {
+      frameHandle = null;
+      renderChat(optimisticHistory, {
+        showTyping: true,
+        streamPreview: assistantPreview
+      });
+    };
+
+    if (typeof window !== "undefined" && typeof window.requestAnimationFrame === "function") {
+      frameHandle = window.requestAnimationFrame(render);
+    } else {
+      frameHandle = setTimeout(render, 16);
+    }
+  };
+  const flushPreviewRender = () => {
+    if (frameHandle === null) {
+      return;
+    }
+    if (typeof window !== "undefined" && typeof window.cancelAnimationFrame === "function") {
+      window.cancelAnimationFrame(frameHandle);
+    } else {
+      clearTimeout(frameHandle);
+    }
+    frameHandle = null;
+    renderChat(optimisticHistory, {
+      showTyping: true,
+      streamPreview: assistantPreview
+    });
+  };
 
   try {
     state.isStreaming = true;
@@ -953,29 +1353,42 @@ async function sendChatStreaming(agentId, message, messageParts, optimisticHisto
 
       if (event.event === "message.delta" && event.data && typeof event.data === "object") {
         assistantPreview += String(event.data.content || "");
-        renderChat(optimisticHistory, {
-          showTyping: true,
-          streamPreview: assistantPreview
-        });
+        schedulePreviewRender();
       }
 
       if (event.event === "app.history" && event.data && typeof event.data === "object") {
         finalHistory = Array.isArray(event.data.history) ? event.data.history : null;
+        finalStats = event.data.stats || null;
+        finalResponseId = event.data.responseId || null;
       }
     }
 
+    flushPreviewRender();
+
     if (finalHistory) {
-      renderChat(finalHistory);
+      renderChat(finalHistory, { forceScroll: true });
+      renderAgentDiagnostics(finalStats, finalResponseId);
     } else {
       await loadHistory();
     }
     setStatus("Stream completed.");
   } catch (error) {
-    renderChat(previousHistory);
+    renderChat(previousHistory, { forceScroll: true });
     elements.chatMessage.value = message;
+    state.pendingImages = [...previousPendingImages];
+    syncPendingImagesToInput();
+    updateAttachmentCount();
+    renderAttachmentPreview();
     autoResizeChatMessage();
     setStatus(error.message, true);
   } finally {
+    if (frameHandle !== null) {
+      if (typeof window !== "undefined" && typeof window.cancelAnimationFrame === "function") {
+        window.cancelAnimationFrame(frameHandle);
+      } else {
+        clearTimeout(frameHandle);
+      }
+    }
     state.isStreaming = false;
   }
 }
@@ -986,6 +1399,8 @@ async function initialize() {
   bindNodeGroupPersistence();
   bindEvents();
   updateAttachmentCount();
+  renderAttachmentPreview();
+  setScrollButtonVisible(false);
   autoResizeChatMessage();
 
   try {
@@ -1014,7 +1429,7 @@ async function initialize() {
     } else {
       resetAgentForm();
       loadGroupStateForCurrentAgent();
-      renderChat([]);
+      renderChat([], { forceScroll: true });
     }
   } catch (error) {
     setStatus(error.message, true);
@@ -1036,14 +1451,44 @@ function bindEvents() {
   });
 
   elements.chatImages.addEventListener("change", () => {
-    updateAttachmentCount();
+    mergePendingImages(Array.from(elements.chatImages.files || []));
+    elements.chatImages.value = "";
   });
+
+  if (elements.chatAttachmentPreview) {
+    elements.chatAttachmentPreview.addEventListener("click", (event) => {
+      if (!event.target || typeof event.target.closest !== "function") {
+        return;
+      }
+      const target = event.target.closest(".attachment-remove-btn");
+      if (!target) {
+        return;
+      }
+      const index = Number.parseInt(target.dataset.index || "", 10);
+      removePendingImage(index);
+    });
+  }
+
+  if (elements.chatLog) {
+    elements.chatLog.addEventListener("scroll", () => {
+      syncChatScrollState();
+    });
+  }
+
+  if (elements.scrollToBottomBtn) {
+    elements.scrollToBottomBtn.addEventListener("click", () => {
+      scrollChatToBottom({ smooth: true });
+    });
+  }
 
   elements.chatMessage.addEventListener("input", () => {
     autoResizeChatMessage();
   });
 
   elements.agentList.addEventListener("click", async (event) => {
+    if (!event.target || typeof event.target.closest !== "function") {
+      return;
+    }
     const item = event.target.closest("[data-id]");
     if (!item) return;
     try {
@@ -1059,7 +1504,7 @@ function bindEvents() {
     renderAgentList();
     resetAgentForm();
     loadGroupStateForCurrentAgent();
-    renderChat([]);
+    renderChat([], { forceScroll: true });
     setStatus("Creating new agent.");
   });
 
@@ -1140,7 +1585,7 @@ function bindEvents() {
       } else {
         resetAgentForm();
         loadGroupStateForCurrentAgent();
-        renderChat([]);
+        renderChat([], { forceScroll: true });
       }
       setStatus("Agent deleted.");
     } catch (error) {
@@ -1191,7 +1636,8 @@ function bindEvents() {
 
     const previousHistory = [...state.chatHistory];
     const message = elements.chatMessage.value.trim();
-    const files = Array.from(elements.chatImages.files || []);
+    const files = [...state.pendingImages];
+    const previousPendingImages = [...state.pendingImages];
 
     try {
       if (!state.selectedAgentId) {
@@ -1207,21 +1653,39 @@ function bindEvents() {
       }
 
       const optimisticHistory = [...previousHistory, { role: "user", content: buildUserPreview(message, files.length) }];
-      renderChat(optimisticHistory, { showTyping: true });
+      state.shouldStickToBottom = true;
+      renderChat(optimisticHistory, { showTyping: true, forceScroll: true });
       elements.chatMessage.value = "";
-      elements.chatImages.value = "";
-      updateAttachmentCount();
+      clearPendingImages();
       autoResizeChatMessage();
 
       const selected = getSelectedAgent();
       if (selected?.stream) {
-        await sendChatStreaming(state.selectedAgentId, message, messageParts, optimisticHistory, previousHistory);
+        await sendChatStreaming(
+          state.selectedAgentId,
+          message,
+          messageParts,
+          optimisticHistory,
+          previousHistory,
+          previousPendingImages
+        );
       } else {
-        await sendChatNonStreaming(state.selectedAgentId, message, messageParts, optimisticHistory, previousHistory);
+        await sendChatNonStreaming(
+          state.selectedAgentId,
+          message,
+          messageParts,
+          optimisticHistory,
+          previousHistory,
+          previousPendingImages
+        );
       }
     } catch (error) {
-      renderChat(previousHistory);
+      renderChat(previousHistory, { forceScroll: true });
       elements.chatMessage.value = message;
+      state.pendingImages = previousPendingImages;
+      syncPendingImagesToInput();
+      updateAttachmentCount();
+      renderAttachmentPreview();
       autoResizeChatMessage();
       setStatus(error.message, true);
     }
@@ -1239,7 +1703,8 @@ function bindEvents() {
           reset: true
         })
       });
-      renderChat(payload.history || []);
+      renderChat(payload.history || [], { forceScroll: true });
+      renderAgentDiagnostics(null, null);
       setStatus("Conversation reset.");
     } catch (error) {
       setStatus(error.message, true);
