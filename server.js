@@ -21,6 +21,10 @@ const { parseSseBlock } = require("./src/server/services/lmstudioStreamParser");
 const { openSse, sendEvent, closeSse } = require("./src/server/sse/sseHelpers");
 const { createOrchestrator } = require("./src/server/services/orchestrator/orchestrator");
 const { registerSystemRoutes } = require("./src/server/routes/systemRoutes");
+const { registerAgentRoutes } = require("./src/server/routes/agentRoutes");
+const { registerMcpRoutes } = require("./src/server/routes/mcpRoutes");
+const { registerPipelineRoutes } = require("./src/server/routes/pipelineRoutes");
+const { registerRunRoutes } = require("./src/server/routes/runRoutes");
 const { createErrorHandler } = require("./src/server/middleware/errorHandler");
 const {
   ensureConfigFile: ensureConfigFileInStore,
@@ -1646,6 +1650,11 @@ function findRun(runId) {
   return runs.find((run) => run.runId === runId) || null;
 }
 
+function setRuns(nextRuns) {
+  runs = nextRuns;
+  runtimeState.runs = runs;
+}
+
 const orchestration = createOrchestrator({
   canonicalStages: CANONICAL_PIPELINE_STAGES,
   runStreamSubscribers,
@@ -1681,443 +1690,64 @@ registerSystemRoutes(app, {
   lmStudioJsonRequest
 });
 
-app.get("/api/agents", (req, res) => {
-  res.json(agents.map(agentToClient));
+registerMcpRoutes(app, {
+  sanitizeIntegrations,
+  buildRequestError,
+  lmStudioJsonRequest,
+  summarizeOutputTypes
 });
 
-app.post("/api/mcp/test", async (req, res, next) => {
-  try {
-    const model = String(req.body?.model || "").trim();
-    const systemPrompt = String(req.body?.systemPrompt || "").trim();
-    const integrations = sanitizeIntegrations(req.body?.integrations);
-
-    if (!model) {
-      throw buildRequestError(400, "Model is required.");
-    }
-    if (!integrations.length) {
-      throw buildRequestError(400, "At least one integration is required.");
-    }
-
-    const payload = {
-      model,
-      input:
-        "MCP integration test. If MCP tools are available, briefly confirm and include any discovered tool names.",
-      stream: false,
-      store: false,
-      temperature: 0,
-      max_output_tokens: 160,
-      integrations
-    };
-    if (systemPrompt) {
-      payload.system_prompt = systemPrompt;
-    }
-
-    const result = await lmStudioJsonRequest({
-      endpoint: "/chat",
-      method: "POST",
-      body: payload,
-      native: true
-    });
-
-    const output = Array.isArray(result?.output) ? result.output : [];
-    const toolSignalsDetected = output.some((item) => {
-      const type = String(item?.type || "").trim().toLowerCase();
-      return type === "tool_call" || type === "invalid_tool_call";
-    });
-
-    res.json({
-      ok: true,
-      toolSignalsDetected,
-      outputTypes: summarizeOutputTypes(result)
-    });
-  } catch (error) {
-    next(error);
-  }
+registerAgentRoutes(app, {
+  getAgents: () => agents,
+  saveAgents,
+  sanitizeAgent,
+  agentToClient,
+  buildRequestError,
+  randomUUID
 });
 
-app.post("/api/agents", async (req, res, next) => {
-  try {
-    const agentInput = sanitizeAgent(req.body);
-    const now = new Date().toISOString();
-    const agent = {
-      id: randomUUID(),
-      ...agentInput,
-      chatHistory: [],
-      lastResponseId: null,
-      lastStats: null,
-      createdAt: now,
-      updatedAt: now
-    };
-    agents.push(agent);
-    await saveAgents();
-    res.status(201).json(agentToClient(agent));
-  } catch (error) {
-    next(error);
-  }
+registerPipelineRoutes(app, {
+  getPipelines: () => pipelines,
+  findPipeline,
+  pipelineToClient,
+  sanitizePipeline,
+  sanitizeTrimmedString,
+  buildRequestError,
+  savePipelines,
+  randomUUID,
+  orchestration,
+  sanitizeRunCreate,
+  getRuns: () => runs,
+  setRuns,
+  runsLimit: RUNS_LIMIT,
+  saveRuns,
+  activePipelineRuns,
+  findRun
 });
 
-app.put("/api/agents/:id", async (req, res, next) => {
-  try {
-    const index = agents.findIndex((agent) => agent.id === req.params.id);
-    if (index === -1) {
-      throw buildRequestError(404, "Agent not found.");
-    }
-
-    const updates = sanitizeAgent(req.body);
-    const previous = agents[index];
-    const updated = {
-      ...previous,
-      ...updates,
-      lastResponseId: updates.store ? previous.lastResponseId : null,
-      updatedAt: new Date().toISOString()
-    };
-    agents[index] = updated;
-    await saveAgents();
-    res.json(agentToClient(updated));
-  } catch (error) {
-    next(error);
-  }
-});
-
-app.delete("/api/agents/:id", async (req, res, next) => {
-  try {
-    const index = agents.findIndex((agent) => agent.id === req.params.id);
-    if (index === -1) {
-      throw buildRequestError(404, "Agent not found.");
-    }
-
-    agents.splice(index, 1);
-    await saveAgents();
-    res.json({ deleted: true });
-  } catch (error) {
-    next(error);
-  }
-});
-
-app.get("/api/pipelines", (req, res) => {
-  res.json(pipelines.map(pipelineToClient));
-});
-
-app.get("/api/pipelines/:id", (req, res, next) => {
-  try {
-    const pipeline = findPipeline(req.params.id);
-    if (!pipeline) {
-      throw buildRequestError(404, "Pipeline not found.");
-    }
-    res.json(pipelineToClient(pipeline));
-  } catch (error) {
-    next(error);
-  }
-});
-
-app.post("/api/pipelines", async (req, res, next) => {
-  try {
-    const input = sanitizePipeline(req.body, { strict: true });
-    const requestedId = sanitizeTrimmedString(req.body?.id, { maxLength: 120 });
-    const now = new Date().toISOString();
-
-    if (requestedId) {
-      const index = pipelines.findIndex((pipeline) => pipeline.id === requestedId);
-      if (index === -1) {
-        throw buildRequestError(404, "Pipeline not found.");
-      }
-      const previous = pipelines[index];
-      const updated = {
-        ...previous,
-        ...input,
-        updatedAt: now
-      };
-      pipelines[index] = updated;
-      await savePipelines();
-      res.json(pipelineToClient(updated));
-      return;
-    }
-
-    const created = {
-      id: randomUUID(),
-      ...input,
-      createdAt: now,
-      updatedAt: now
-    };
-
-    pipelines.push(created);
-    await savePipelines();
-    res.status(201).json(pipelineToClient(created));
-  } catch (error) {
-    next(error);
-  }
-});
-
-app.put("/api/pipelines/:id", async (req, res, next) => {
-  try {
-    const index = pipelines.findIndex((pipeline) => pipeline.id === req.params.id);
-    if (index === -1) {
-      throw buildRequestError(404, "Pipeline not found.");
-    }
-
-    const updates = sanitizePipeline(req.body, { strict: true });
-    const previous = pipelines[index];
-    const updated = {
-      ...previous,
-      ...updates,
-      updatedAt: new Date().toISOString()
-    };
-
-    pipelines[index] = updated;
-    await savePipelines();
-    res.json(pipelineToClient(updated));
-  } catch (error) {
-    next(error);
-  }
-});
-
-app.delete("/api/pipelines/:id", async (req, res, next) => {
-  try {
-    const index = pipelines.findIndex((pipeline) => pipeline.id === req.params.id);
-    if (index === -1) {
-      throw buildRequestError(404, "Pipeline not found.");
-    }
-
-    pipelines.splice(index, 1);
-    await savePipelines();
-    res.json({ deleted: true });
-  } catch (error) {
-    next(error);
-  }
-});
-
-app.post("/api/pipelines/:id/run", async (req, res, next) => {
-  try {
-    const pipeline = findPipeline(req.params.id);
-    orchestration.ensurePipelineReadyForRun(pipeline);
-
-    const runInput = sanitizeRunCreate({
-      ...req.body,
-      pipelineId: pipeline.id
-    });
-
-    const now = new Date().toISOString();
-    const run = {
-      runId: randomUUID(),
-      ...runInput,
-      status: "queued",
-      createdAt: now,
-      updatedAt: now
-    };
-
-    runs.unshift(run);
-    if (runs.length > RUNS_LIMIT) {
-      runs = runs.slice(0, RUNS_LIMIT);
-      runtimeState.runs = runs;
-    }
-    await saveRuns();
-
-    if (!activePipelineRuns.has(run.runId)) {
-      const execution = orchestration.runPipelineOrchestration(run.runId).catch((error) => {
-        const currentRun = findRun(run.runId);
-        if (!currentRun) {
-          return;
-        }
-        currentRun.status = "failed";
-        currentRun.failedStage = currentRun.failedStage || "unknown";
-        currentRun.errorMessage = error.message || "Pipeline orchestration failed.";
-        currentRun.errorAt = new Date().toISOString();
-        currentRun.updatedAt = currentRun.errorAt;
-        orchestration.appendRunLog(currentRun, "error", currentRun.errorMessage);
-        orchestration.saveRunsAndBroadcast(currentRun, "run_failed", {
-          stageId: currentRun.failedStage,
-          error: currentRun.errorMessage
-        }).finally(() => orchestration.closeRunStream(currentRun.runId));
-      });
-      activePipelineRuns.set(run.runId, execution);
-    }
-
-    res.status(202).json({ runId: run.runId });
-  } catch (error) {
-    next(error);
-  }
-});
-
-app.get("/api/runs", (req, res, next) => {
-  try {
-    const pipelineId = sanitizeTrimmedString(req.query?.pipelineId, { maxLength: 120 });
-    const statusQuery = sanitizeTrimmedString(req.query?.status, { maxLength: 240 });
-    const limit = clamp(toInteger(req.query?.limit, 100), 1, 500);
-
-    let list = [...runs];
-    if (pipelineId) {
-      list = list.filter((run) => run.pipelineId === pipelineId);
-    }
-
-    if (statusQuery) {
-      const statuses = statusQuery
-        .split(",")
-        .map((item) => item.trim().toLowerCase())
-        .filter(Boolean);
-
-      for (const status of statuses) {
-        if (!RUN_STATUS_VALUES.has(status)) {
-          throw buildRequestError(400, `Unsupported run status filter: ${status}`);
-        }
-      }
-      list = list.filter((run) => statuses.includes(run.status));
-    }
-
-    list.sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
-    res.json(list.slice(0, limit).map(runToClient));
-  } catch (error) {
-    next(error);
-  }
-});
-
-app.get("/api/runs/:runId", (req, res, next) => {
-  try {
-    const run = findRun(req.params.runId);
-    if (!run) {
-      throw buildRequestError(404, "Run not found.");
-    }
-    res.json(runToClient(run));
-  } catch (error) {
-    next(error);
-  }
-});
-
-app.get("/api/runs/:runId/stream", (req, res, next) => {
-  try {
-    const run = findRun(req.params.runId);
-    if (!run) {
-      throw buildRequestError(404, "Run not found.");
-    }
-
-    openSse(res);
-
-    const isTerminal = run.status === "completed" || run.status === "failed" || run.status === "cancelled";
-    if (isTerminal) {
-      const terminalEvent = run.status === "completed" ? "run_completed" : "run_failed";
-      writeSse(res, terminalEvent, {
-        runId: run.runId,
-        pipelineId: run.pipelineId,
-        status: run.status,
-        stageState: run.stageState,
-        failedStage: run.failedStage,
-        error: run.errorMessage
-      });
-      closeSse(res);
-      return;
-    }
-
-    const subscribers = orchestration.getRunSubscribers(run.runId);
-    subscribers.add(res);
-
-    writeSse(res, "run_started", {
-      runId: run.runId,
-      pipelineId: run.pipelineId,
-      status: run.status,
-      stageState: run.stageState
-    });
-
-    const heartbeat = setInterval(() => {
-      try {
-        writeSse(res, "heartbeat", { runId: run.runId, at: new Date().toISOString() });
-      } catch {
-        // ignore write errors
-      }
-    }, RUN_STREAM_HEARTBEAT_MS);
-
-    req.on("close", () => {
-      clearInterval(heartbeat);
-      subscribers.delete(res);
-      if (!subscribers.size) {
-        runStreamSubscribers.delete(run.runId);
-      }
-    });
-  } catch (error) {
-    next(error);
-  }
-});
-
-app.post("/api/runs", async (req, res, next) => {
-  try {
-    const input = sanitizeRunCreate(req.body);
-    const pipeline = findPipeline(input.pipelineId);
-    const now = new Date().toISOString();
-    const run = {
-      runId: randomUUID(),
-      ...input,
-      outputs: input.outputs.length ? input.outputs : pipeline?.outputs || [],
-      createdAt: now,
-      updatedAt: now
-    };
-
-    runs.unshift(run);
-    if (runs.length > RUNS_LIMIT) {
-      runs = runs.slice(0, RUNS_LIMIT);
-      runtimeState.runs = runs;
-    }
-    await saveRuns();
-    res.status(201).json(runToClient(run));
-  } catch (error) {
-    next(error);
-  }
-});
-
-app.put("/api/runs/:runId", async (req, res, next) => {
-  try {
-    const index = runs.findIndex((run) => run.runId === req.params.runId);
-    if (index === -1) {
-      throw buildRequestError(404, "Run not found.");
-    }
-
-    const previous = runs[index];
-    const updates = sanitizeRunUpdate(req.body, previous);
-    const updated = {
-      ...previous,
-      ...updates,
-      updatedAt: new Date().toISOString()
-    };
-
-    runs[index] = updated;
-    await saveRuns();
-    res.json(runToClient(updated));
-  } catch (error) {
-    next(error);
-  }
-});
-
-app.post("/api/runs/:runId/logs", async (req, res, next) => {
-  try {
-    const run = findRun(req.params.runId);
-    if (!run) {
-      throw buildRequestError(404, "Run not found.");
-    }
-
-    const logs = sanitizeRunLogs([req.body]);
-    if (!logs.length) {
-      throw buildRequestError(400, "A non-empty log message is required.");
-    }
-
-    run.logs = [...run.logs, ...logs].slice(-5000);
-    run.updatedAt = new Date().toISOString();
-    await saveRuns();
-    res.status(201).json(runToClient(run));
-  } catch (error) {
-    next(error);
-  }
-});
-
-app.delete("/api/runs/:runId", async (req, res, next) => {
-  try {
-    const index = runs.findIndex((run) => run.runId === req.params.runId);
-    if (index === -1) {
-      throw buildRequestError(404, "Run not found.");
-    }
-
-    runs.splice(index, 1);
-    await saveRuns();
-    res.json({ deleted: true });
-  } catch (error) {
-    next(error);
-  }
+registerRunRoutes(app, {
+  getRuns: () => runs,
+  setRuns,
+  findRun,
+  findPipeline,
+  runToClient,
+  sanitizeTrimmedString,
+  clamp,
+  toInteger,
+  runStatusValues: RUN_STATUS_VALUES,
+  buildRequestError,
+  openSse,
+  writeSse,
+  closeSse,
+  orchestration,
+  runStreamHeartbeatMs: RUN_STREAM_HEARTBEAT_MS,
+  runStreamSubscribers,
+  sanitizeRunCreate,
+  runsLimit: RUNS_LIMIT,
+  randomUUID,
+  saveRuns,
+  sanitizeRunUpdate,
+  sanitizeRunLogs
 });
 
 app.get("/api/chat/:agentId/history", (req, res, next) => {
