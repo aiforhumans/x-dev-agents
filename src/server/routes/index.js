@@ -4,6 +4,7 @@
 const { registerSystemRoutes } = require("./systemRoutes");
 const { registerAgentRoutes } = require("./agentRoutes");
 const { registerAgentGroupRoutes } = require("./agentGroupRoutes");
+const { registerRunProfileRoutes } = require("./runProfileRoutes");
 const { registerMcpRoutes } = require("./mcpRoutes");
 const { registerPipelineRoutes } = require("./pipelineRoutes");
 const { registerRunRoutes } = require("./runRoutes");
@@ -14,6 +15,7 @@ function registerApiRoutes(app, deps) {
   registerMcpRoutes(app, deps.mcp);
   registerAgentRoutes(app, deps.agents);
   registerAgentGroupRoutes(app, deps.agentGroups);
+  registerRunProfileRoutes(app, deps.runProfiles);
   registerPipelineRoutes(app, deps.pipelines);
   registerRunRoutes(app, deps.runs);
   registerChatRoutes(app, deps.chat);

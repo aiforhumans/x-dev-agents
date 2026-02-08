@@ -34,15 +34,80 @@
       <main id="layout" class="layout">
         <section id="agentsPanel" class="panel agents-panel">
           <div class="panel-title-row">
-            <h2>Agents</h2>
+            <h2>Navigation</h2>
             <button id="newAgentBtn" type="button">New Agent</button>
           </div>
+
+          <h3 class="nav-heading">Agent Groups</h3>
+          <ul id="agentGroupList" class="agent-group-list"></ul>
+
+          <h3 class="nav-heading">Agents</h3>
           <ul id="agentList" class="agent-list"></ul>
 
-          <details id="groupTeams" class="node-group team-group" data-group="teams">
-            <summary>Multi-Agent Groups</summary>
+          <h3 class="nav-heading">Pipelines</h3>
+          <ul id="pipelineList" class="agent-list"></ul>
+
+          <h3 class="nav-heading">Runs</h3>
+          <ul id="runList" class="agent-list"></ul>
+
+          <h3 class="nav-heading">Models</h3>
+          <ul id="modelListQuick" class="agent-list"></ul>
+
+          <h3 class="nav-heading">Diagnostics</h3>
+          <pre id="systemDiagnostics" class="agent-last-stats">No diagnostics.</pre>
+        </section>
+
+        <div
+          id="layoutResizer"
+          class="layout-resizer"
+          role="separator"
+          aria-label="Resize navigation and output panels"
+          aria-orientation="vertical"
+          tabindex="0"
+        ></div>
+
+        <section id="chatPanel" class="panel chat-panel">
+          <div class="chat-panel-head">
+            <h2 id="chatTitle">Run Output Timeline</h2>
+            <p>Main output only: narrative, tools, artifacts, evidence.</p>
+          </div>
+
+          <div class="chat-shell">
+            <div id="chatLog" class="chat-log"></div>
+            <button id="scrollToBottomBtn" class="scroll-bottom-btn" type="button" hidden>Jump to latest</button>
+            <form id="chatForm" class="chat-form">
+              <div class="composer-row">
+                <button id="chatAttachBtn" class="chat-attach-btn" type="button" aria-label="Attach images">+</button>
+                <textarea id="chatMessage" rows="1" placeholder="Ask anything"></textarea>
+                <button id="sendMessageBtn" class="chat-send-btn" type="submit">Send</button>
+              </div>
+              <input id="chatImages" class="visually-hidden" type="file" accept="image/*" multiple />
+              <div id="chatAttachmentPreview" class="attachment-preview" aria-live="polite"></div>
+              <div class="composer-tools">
+                <span id="chatAttachmentCount" class="attachment-count"></span>
+                <button id="resetChatBtn" class="secondary" type="button">Reset</button>
+              </div>
+            </form>
+          </div>
+        </section>
+
+        <div
+          id="layoutResizerRight"
+          class="layout-resizer"
+          role="separator"
+          aria-label="Resize output and settings panels"
+          aria-orientation="vertical"
+          tabindex="0"
+        ></div>
+
+        <section id="settingsPanel" class="panel agents-panel">
+          <div class="panel-title-row">
+            <h2>Settings & Control</h2>
+          </div>
+
+          <details id="groupTeams" class="node-group team-group" data-group="teams" open>
+            <summary>Group / Pipeline Profile</summary>
             <div class="node-group-body">
-              <ul id="agentGroupList" class="agent-group-list"></ul>
               <form id="agentGroupForm" class="agent-group-form">
                 <input id="agentGroupId" type="hidden" />
                 <label for="agentGroupName">Group Name</label>
@@ -90,8 +155,15 @@
                   <button id="saveAgentGroupBtn" type="submit">Save Group</button>
                 </div>
                 <div class="row form-actions">
-                  <button id="runAgentGroupBtn" class="secondary" type="button">Run Group</button>
-                  <button id="deleteAgentGroupBtn" class="danger" type="button">Delete Group</button>
+                  <button id="runAgentGroupBtn" class="secondary" type="button">Start</button>
+                  <button id="runPipelineBtn" type="button">Run Pipeline</button>
+                  <button id="pauseRunBtn" type="button">Pause</button>
+                  <button id="resumeRunBtn" type="button">Resume</button>
+                </div>
+                <div class="row form-actions">
+                  <button id="cancelRunBtn" class="danger" type="button">Cancel</button>
+                  <button id="retryRunBtn" type="button">Retry Stage</button>
+                  <button id="deleteAgentGroupBtn" class="danger" type="button">Delete</button>
                 </div>
               </form>
             </div>
@@ -242,40 +314,6 @@
               <button id="deleteAgentBtn" class="danger" type="button">Delete</button>
             </div>
           </form>
-        </section>
-
-        <div
-          id="layoutResizer"
-          class="layout-resizer"
-          role="separator"
-          aria-label="Resize editor and chat panels"
-          aria-orientation="vertical"
-          tabindex="0"
-        ></div>
-
-        <section id="chatPanel" class="panel chat-panel">
-          <div class="chat-panel-head">
-            <h2 id="chatTitle">Agent Chat</h2>
-            <p>Live response stream with persisted history and stats.</p>
-          </div>
-
-          <div class="chat-shell">
-            <div id="chatLog" class="chat-log"></div>
-            <button id="scrollToBottomBtn" class="scroll-bottom-btn" type="button" hidden>Jump to latest</button>
-            <form id="chatForm" class="chat-form">
-              <div class="composer-row">
-                <button id="chatAttachBtn" class="chat-attach-btn" type="button" aria-label="Attach images">+</button>
-                <textarea id="chatMessage" rows="1" placeholder="Ask anything"></textarea>
-                <button id="sendMessageBtn" class="chat-send-btn" type="submit">Send</button>
-              </div>
-              <input id="chatImages" class="visually-hidden" type="file" accept="image/*" multiple />
-              <div id="chatAttachmentPreview" class="attachment-preview" aria-live="polite"></div>
-              <div class="composer-tools">
-                <span id="chatAttachmentCount" class="attachment-count"></span>
-                <button id="resetChatBtn" class="secondary" type="button">Reset</button>
-              </div>
-            </form>
-          </div>
         </section>
       </main>
 

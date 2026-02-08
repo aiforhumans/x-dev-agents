@@ -11,6 +11,7 @@ function registerSystemRoutes(app, deps) {
     getAgentGroups = () => [],
     getPipelines,
     getRuns,
+    getRunProfiles = () => [],
     normalizeBaseUrl,
     saveConfig,
     lmStudioJsonRequest,
@@ -54,7 +55,8 @@ function registerSystemRoutes(app, deps) {
       agentCount: getAgents().length,
       agentGroupCount: getAgentGroups().length,
       pipelineCount: getPipelines().length,
-      runCount: getRuns().length
+      runCount: getRuns().length,
+      runProfileCount: getRunProfiles().length
     });
   });
 

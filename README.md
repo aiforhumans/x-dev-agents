@@ -11,8 +11,11 @@ Local web app for creating and testing custom agents backed by the LM Studio API
 
 - ChatGPT-style UI refresh:
   - wider workspace with a calmer, minimal visual style
-  - resizable editor/chat split on desktop (stored locally)
-  - keyboard-accessible resizer controls (`ArrowLeft/ArrowRight`, `Home/End`, `Shift` for larger steps)
+  - 3-pane IA:
+    - left navigation (`Agent Groups`, `Agents`, `Pipelines`, `Runs`, `Models`, `Diagnostics`)
+    - center output timeline (`run narrative`, `tool events`, `artifacts`, `evidence`, failures)
+    - right settings/control (group profile, role mapping, run controls, agent tuning)
+  - resizable pane controls on desktop (keyboard + pointer)
   - foldable agent node groups with per-agent open/closed state
   - updated form information architecture:
     - `Basics`, `Model`, `Sampling`, `Output`
@@ -37,14 +40,19 @@ Local web app for creating and testing custom agents backed by the LM Studio API
   - per-stage tooling policy (`toolsPolicy`)
   - target deliverables (`outputs`)
 - Pipeline Runs persisted in `data/runs.json`:
-  - run lifecycle status (`queued`, `running`, `completed`, `failed`, `cancelled`)
+  - run lifecycle status (`queued`, `running`, `paused`, `cancelling`, `completed`, `failed`, `cancelled`)
   - run inputs (`topic`, `seedLinks`, `brandVoice`, `targetPlatforms`)
-  - run artifacts, evidence snapshots/citations, logs, and metrics
+  - run artifacts, evidence snapshots/citations, logs, metrics, and timeline metadata
+  - additive reproducibility fields: `runType`, `profileId`, `profileSnapshot`, `control`
 - Multi-Agent Groups persisted in `data/agent-groups.json`:
   - reusable named teams mapped to canonical roles (`discovery`, `synthesis`, `draft`, `adapt`, `style`, `audit`)
   - sequential execution settings and default run options
   - minimal UI panel for group CRUD and one-click group run kickoff
   - live **Group Run Status** panel with stage/status/event updates from `/api/runs/:runId/stream`
+- Run Profiles persisted in `data/run-profiles.json`:
+  - versioned reusable profiles for `group` and `pipeline` scope
+  - profile modes: `inherit_defaults`, `override_per_role`, `override_per_stage`
+  - profile snapshot freezing on run start for reproducibility
 - Render assistant output types from LM Studio:
   - `message`
   - `reasoning` (collapsible)
@@ -102,8 +110,9 @@ Open `http://localhost:3000`.
   - `data/agent-groups.json`
   - `data/pipelines.json`
   - `data/runs.json`
+  - `data/run-profiles.json`
 
-## Content Pipelines API
+## Orchestration API
 
 - Agent Groups:
   - `GET /api/agent-groups`
@@ -111,7 +120,14 @@ Open `http://localhost:3000`.
   - `POST /api/agent-groups` (create or update when `groupId`/`id` is supplied)
   - `PUT /api/agent-groups/:id`
   - `DELETE /api/agent-groups/:id`
-  - `POST /api/agent-groups/:id/run` (starts async sequential group orchestration, returns `{ runId }`)
+  - `POST /api/agent-groups/:id/run` (supports `profileId`/`profileOverrides`/`freezeSettings`; returns `{ runId }`)
+
+- Run Profiles:
+  - `GET /api/run-profiles`
+  - `GET /api/run-profiles/:id`
+  - `POST /api/run-profiles` (create or update when `profileId`/`id` is supplied)
+  - `PUT /api/run-profiles/:id`
+  - `DELETE /api/run-profiles/:id`
 
 - Pipelines:
   - `GET /api/pipelines`
@@ -119,14 +135,15 @@ Open `http://localhost:3000`.
   - `POST /api/pipelines` (create or update when `id` is supplied)
   - `PUT /api/pipelines/:id`
   - `DELETE /api/pipelines/:id`
-  - `POST /api/pipelines/:id/run` (starts async orchestration, returns `{ runId }`)
+  - `POST /api/pipelines/:id/run` (supports `profileId`/`profileOverrides`/`freezeSettings`; returns `{ runId }`)
 - Runs:
-  - `GET /api/runs` (optional query: `pipelineId`, `status`, `limit`)
+  - `GET /api/runs` (optional query: `pipelineId`, `groupId`, `runType`, `profileId`, `status`, `limit`)
   - `GET /api/runs/:runId`
   - `GET /api/runs/:runId/stream` (SSE orchestration events)
   - `POST /api/runs`
   - `PUT /api/runs/:runId`
   - `POST /api/runs/:runId/logs`
+  - `POST /api/runs/:runId/control` (`cancel`, `pause`, `resume`, `retry_stage`)
   - `DELETE /api/runs/:runId`
 
 ### Run Stream Event Types
@@ -140,6 +157,11 @@ Open `http://localhost:3000`.
 - `stage_completed`
 - `run_completed`
 - `run_failed`
+- `run_paused`
+- `run_cancel_requested`
+- `run_cancelled`
+- `run_resumed`
+- `stage_retry_started`
 - `heartbeat`
 
 ### Group Run UI Notes
@@ -171,6 +193,11 @@ Open `http://localhost:3000`.
 ## UI Persistence Notes
 
 - Desktop pane width is stored in localStorage key: `ui.layout.leftPaneWidthPx`.
+- Additional pane state keys:
+  - `ui.layout.navPaneWidthPx`
+  - `ui.layout.settingsPaneWidthPx`
+  - `ui.layout.settingsOpen`
+  - `ui.layout.navSection.<sectionId>`
 - Agent editor fold-state is stored per agent:
   - `ui.agentForm.groupState.<agentId>`
   - `ui.agentForm.groupState.__new__` for unsaved new agents.
@@ -227,6 +254,6 @@ npm test
 
 ## GitHub Notes
 
-- `data/config.json`, `data/agents.json`, `data/agent-groups.json`, `data/pipelines.json`, and `data/runs.json` are local runtime files and are not tracked in git.
+- `data/config.json`, `data/agents.json`, `data/agent-groups.json`, `data/pipelines.json`, `data/runs.json`, and `data/run-profiles.json` are local runtime files and are not tracked in git.
 - After cloning, run `npm install` and start the app; required data files are created automatically.
 - CI runs `npm test` on pushes to `main` and pull requests.

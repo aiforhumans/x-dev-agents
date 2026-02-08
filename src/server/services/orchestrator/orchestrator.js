@@ -32,6 +32,24 @@ function createOrchestrator({
     return canonicalStages.find((stage) => stage.stageId === stageId) || null;
   }
 
+  async function waitForRunResumeOrCancel(run) {
+    while (run?.control?.status === "paused" || run?.status === "paused") {
+      await saveRunsAndBroadcast(run, "run_paused", { status: "paused" });
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      if (run?.control?.status === "cancelling" || run?.status === "cancelling") {
+        run.control = run.control || {};
+        run.control.status = "cancelled";
+        run.status = "cancelled";
+        run.updatedAt = new Date().toISOString();
+        appendRunLog(run, "warn", "Run cancelled while paused.");
+        await saveRunsAndBroadcast(run, "run_cancelled", { status: "cancelled" });
+        closeRunStream(run.runId);
+        return false;
+      }
+    }
+    return true;
+  }
+
   function buildExecutionPipeline(run) {
     if (isPlainObject(run?.groupSnapshot) && isPlainObject(run.groupSnapshot.roles)) {
       const enabledStageSet = new Set(
@@ -272,6 +290,15 @@ function createOrchestrator({
     const toolEvents = [];
 
     for await (const chunk of upstream.body) {
+      if (run?.control?.status === "cancelling" || run?.status === "cancelling") {
+        throw buildRequestError(499, "Run cancelled.");
+      }
+      if (run?.control?.status === "paused" || run?.status === "paused") {
+        const canContinue = await waitForRunResumeOrCancel(run);
+        if (!canContinue) {
+          throw buildRequestError(499, "Run cancelled.");
+        }
+      }
       buffer += decoder.decode(chunk, { stream: true });
 
       while (true) {
@@ -506,6 +533,8 @@ function createOrchestrator({
       return;
     }
 
+    run.control = run.control || {};
+    run.control.status = "running";
     run.status = "running";
     run.updatedAt = new Date().toISOString();
     appendRunLog(run, "info", "Pipeline run started.");
@@ -518,9 +547,33 @@ function createOrchestrator({
       .filter((stage) => stage.enabled !== false)
       .sort((a, b) => a.order - b.order);
 
+    let startFrom = run.control.resumeFromStageId || null;
+    let started = startFrom ? false : true;
+
     try {
       for (const stage of stageList) {
         const stageId = stage.stageId;
+        if (!started) {
+          if (stageId !== startFrom) {
+            continue;
+          }
+          started = true;
+        }
+        if (run.control?.status === "cancelling" || run.status === "cancelling") {
+          run.control.status = "cancelled";
+          run.status = "cancelled";
+          run.updatedAt = new Date().toISOString();
+          appendRunLog(run, "warn", "Run cancelled.");
+          await saveRunsAndBroadcast(run, "run_cancelled", { status: run.status });
+          closeRunStream(run.runId);
+          return;
+        }
+        if (run.control?.status === "paused" || run.status === "paused") {
+          const canContinue = await waitForRunResumeOrCancel(run);
+          if (!canContinue) {
+            return;
+          }
+        }
         const agentId = pipeline.agentsByRole?.[stage.role];
         const agent = findAgent(agentId);
         if (!agent) {
@@ -557,6 +610,17 @@ function createOrchestrator({
         run.metrics = run.metrics || {};
         run.metrics.perStage = run.metrics.perStage || {};
         run.metrics.perStage[stageId] = sanitizeStats(stageResult.result?.stats) || null;
+        run.timelineMeta = run.timelineMeta || { perStage: {} };
+        run.timelineMeta.perStage = run.timelineMeta.perStage || {};
+        const stageEntry = run.stageState[stageId];
+        run.timelineMeta.perStage[stageId] = {
+          durationMs:
+            stageEntry?.startedAt && stageEntry?.completedAt
+              ? Math.max(0, new Date(stageEntry.completedAt).getTime() - new Date(stageEntry.startedAt).getTime())
+              : null,
+          toolCount: Array.isArray(stageResult.toolEvents) ? stageResult.toolEvents.length : 0,
+          tokenStats: run.metrics.perStage[stageId] || null
+        };
         setRunStageStatus(run, stageId, "completed", {
           stats: run.metrics.perStage[stageId],
           error: null
@@ -572,6 +636,8 @@ function createOrchestrator({
       }
 
       run.status = "completed";
+      run.control.status = "completed";
+      run.control.resumeFromStageId = null;
       run.updatedAt = new Date().toISOString();
       run.failedStage = null;
       run.errorMessage = null;
@@ -582,12 +648,24 @@ function createOrchestrator({
       });
       closeRunStream(run.runId);
     } catch (error) {
+      if (error?.status === 499 || /cancelled/i.test(String(error?.message || ""))) {
+        run.control.status = "cancelled";
+        run.status = "cancelled";
+        run.updatedAt = new Date().toISOString();
+        appendRunLog(run, "warn", "Run cancelled.");
+        await saveRunsAndBroadcast(run, "run_cancelled", {
+          status: run.status
+        });
+        closeRunStream(run.runId);
+        return;
+      }
       const activeStage =
         Object.values(run.stageState || {}).find((stageEntry) => stageEntry.status === "running")?.stageId || "unknown";
       setRunStageStatus(run, activeStage, "failed", {
         error: error.message || "Stage execution failed."
       });
       run.status = "failed";
+      run.control.status = "failed";
       run.failedStage = activeStage;
       run.errorMessage = error.message || "Pipeline run failed.";
       run.errorAt = new Date().toISOString();

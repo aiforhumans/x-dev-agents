@@ -8,7 +8,8 @@ const {
   AGENT_GROUPS_FILE,
   CONFIG_FILE,
   PIPELINES_FILE,
-  RUNS_FILE
+  RUNS_FILE,
+  RUN_PROFILES_FILE
 } = require("./src/server/config/paths");
 const {
   DEFAULT_SYSTEM_PROMPT,
@@ -58,12 +59,18 @@ const {
   loadRuns: loadRunsFromStore,
   saveRuns: saveRunsToStore
 } = require("./src/server/storage/runsRepo");
+const {
+  ensureRunProfilesFile,
+  loadRunProfiles: loadRunProfilesFromStore,
+  saveRunProfiles: saveRunProfilesToStore
+} = require("./src/server/storage/runProfilesRepo");
 
 const app = express();
 let agents = runtimeState.agents;
 let agentGroups = runtimeState.agentGroups;
 let pipelines = runtimeState.pipelines;
 let runs = runtimeState.runs;
+let runProfiles = runtimeState.runProfiles;
 let config = runtimeState.config;
 const runStreamSubscribers = runtimeState.runStreamSubscribers;
 const activePipelineRuns = runtimeState.activePipelineRuns;
@@ -755,6 +762,255 @@ function mergeAgentGroupRunDefaults(group, runBody) {
   return payload;
 }
 
+function sanitizeRunProfileMode(raw, { strict = true } = {}) {
+  const mode = sanitizeTrimmedString(raw, { maxLength: 80 })?.toLowerCase();
+  if (!mode) {
+    return "inherit_defaults";
+  }
+  if (!new Set(["inherit_defaults", "override_per_role", "override_per_stage"]).has(mode)) {
+    if (strict) {
+      throw buildRequestError(400, `Unsupported run profile mode: ${mode}`);
+    }
+    return "inherit_defaults";
+  }
+  return mode;
+}
+
+function sanitizeRunProfileRoles(raw, { strict = true } = {}) {
+  if (!isPlainObject(raw)) {
+    if (strict) {
+      return {};
+    }
+    return {};
+  }
+
+  const roles = {};
+  for (const stage of CANONICAL_PIPELINE_STAGES) {
+    const role = stage.role;
+    if (!isPlainObject(raw[role])) {
+      continue;
+    }
+    const source = raw[role];
+    const entry = {};
+    const agentId = sanitizeTrimmedString(source.agentId, { maxLength: 120 });
+    if (agentId) {
+      entry.agentId = agentId;
+    }
+    const modelOverride = sanitizeTrimmedString(source.modelOverride, { maxLength: 160 });
+    if (modelOverride) {
+      entry.modelOverride = modelOverride;
+    }
+    const promptAddendum = sanitizeTrimmedString(source.promptAddendum, { maxLength: 12000, allowEmpty: true });
+    if (promptAddendum) {
+      entry.promptAddendum = promptAddendum;
+    }
+    if (source.sampling !== undefined) {
+      entry.sampling = source.sampling;
+    }
+    if (source.outputSchema !== undefined) {
+      entry.outputSchema = source.outputSchema;
+    }
+    if (source.toolsPolicy !== undefined) {
+      entry.toolsPolicy = sanitizeToolsPolicy(source.toolsPolicy);
+    }
+    if (source.memoryPolicy !== undefined) {
+      entry.memoryPolicy = source.memoryPolicy;
+    }
+    if (Object.keys(entry).length) {
+      roles[role] = entry;
+    }
+  }
+
+  return roles;
+}
+
+function sanitizeRunProfileStages(raw, { strict = true } = {}) {
+  if (raw === undefined || raw === null) {
+    return CANONICAL_PIPELINE_STAGES.map((stage, index) => ({
+      stageId: stage.stageId,
+      name: stage.name,
+      role: stage.role,
+      enabled: true,
+      order: index + 1,
+      inputs: ["topic", "prior_artifacts", "evidence"],
+      outputs: [...stage.defaultArtifactNames],
+      toolsPolicy: null,
+      retryPolicy: null
+    }));
+  }
+  if (!Array.isArray(raw)) {
+    if (strict) {
+      throw buildRequestError(400, "Run profile stages must be an array.");
+    }
+    return sanitizeRunProfileStages(undefined, { strict: false });
+  }
+  const byId = new Map();
+  for (const item of raw) {
+    if (!isPlainObject(item)) {
+      continue;
+    }
+    const stageId = roleKeyFromText(item.stageId ?? item.id);
+    if (!stageId || !CANONICAL_STAGE_IDS.has(stageId)) {
+      continue;
+    }
+    const canonical = CANONICAL_PIPELINE_STAGES.find((entry) => entry.stageId === stageId);
+    byId.set(stageId, {
+      stageId,
+      name: sanitizeTrimmedString(item.name, { maxLength: 140 }) || canonical?.name || stageId,
+      role: roleKeyFromText(item.role) || canonical?.role || stageId,
+      enabled: toBoolean(item.enabled, true),
+      order: optionalNumber(item.order, { min: 1, integer: true }) || canonical?.order || byId.size + 1,
+      inputs: sanitizeStringArray(item.inputs, { maxItems: 40, maxLength: 120 }),
+      outputs: sanitizeStringArray(item.outputs, { maxItems: 40, maxLength: 120 }),
+      toolsPolicy: isPlainObject(item.toolsPolicy) ? sanitizeToolsPolicy(item.toolsPolicy) : null,
+      retryPolicy: isPlainObject(item.retryPolicy) ? item.retryPolicy : null
+    });
+  }
+
+  return CANONICAL_PIPELINE_STAGES.map((stage, index) => {
+    const existing = byId.get(stage.stageId);
+    if (existing) {
+      return existing;
+    }
+    return {
+      stageId: stage.stageId,
+      name: stage.name,
+      role: stage.role,
+      enabled: true,
+      order: index + 1,
+      inputs: ["topic", "prior_artifacts", "evidence"],
+      outputs: [...stage.defaultArtifactNames],
+      toolsPolicy: null,
+      retryPolicy: null
+    };
+  });
+}
+
+function sanitizeRunProfile(raw, { strict = true } = {}) {
+  if (!isPlainObject(raw)) {
+    throw buildRequestError(400, "Run profile payload must be an object.");
+  }
+
+  const name = sanitizeTrimmedString(raw.name, { maxLength: 180 });
+  if (strict && !name) {
+    throw buildRequestError(400, "Run profile name is required.");
+  }
+
+  const scopeType = sanitizeTrimmedString(raw.scopeType, { maxLength: 40 })?.toLowerCase();
+  if (strict && !new Set(["group", "pipeline"]).has(scopeType)) {
+    throw buildRequestError(400, "Run profile scopeType must be group or pipeline.");
+  }
+
+  const scopeId = sanitizeTrimmedString(raw.scopeId, { maxLength: 120 });
+  if (strict && !scopeId) {
+    throw buildRequestError(400, "Run profile scopeId is required.");
+  }
+
+  return {
+    name: name || "Untitled Profile",
+    version: optionalNumber(raw.version, { min: 1, integer: true }) || 1,
+    scopeType: scopeType || "group",
+    scopeId: scopeId || "",
+    mode: sanitizeRunProfileMode(raw.mode, { strict }),
+    roles: sanitizeRunProfileRoles(raw.roles, { strict }),
+    stages: sanitizeRunProfileStages(raw.stages, { strict }),
+    outputPolicy: isPlainObject(raw.outputPolicy) ? raw.outputPolicy : {},
+    runSafety: isPlainObject(raw.runSafety) ? raw.runSafety : {}
+  };
+}
+
+function hydrateRunProfile(raw) {
+  const now = new Date().toISOString();
+  const sanitized = sanitizeRunProfile(raw || {}, { strict: false });
+  return {
+    profileId: sanitizeTrimmedString(raw?.profileId ?? raw?.id, { maxLength: 120 }) || randomUUID(),
+    ...sanitized,
+    createdAt: sanitizeTrimmedString(raw?.createdAt, { maxLength: 60 }) || now,
+    updatedAt: sanitizeTrimmedString(raw?.updatedAt, { maxLength: 60 }) || now
+  };
+}
+
+function runProfileToClient(profile) {
+  return {
+    profileId: profile.profileId,
+    name: profile.name,
+    version: profile.version,
+    scopeType: profile.scopeType,
+    scopeId: profile.scopeId,
+    mode: profile.mode,
+    roles: profile.roles,
+    stages: profile.stages,
+    outputPolicy: profile.outputPolicy,
+    runSafety: profile.runSafety,
+    createdAt: profile.createdAt,
+    updatedAt: profile.updatedAt
+  };
+}
+
+function findRunProfile(profileId) {
+  return runProfiles.find((profile) => profile.profileId === profileId) || null;
+}
+
+function sanitizeRunControl(raw) {
+  const source = isPlainObject(raw) ? raw : {};
+  const status = sanitizeTrimmedString(source.status, { maxLength: 40 })?.toLowerCase() || "queued";
+  const allowed = new Set(["queued", "running", "paused", "cancelling", "cancelled", "completed", "failed"]);
+  return {
+    status: allowed.has(status) ? status : "queued",
+    resumeFromStageId: sanitizeTrimmedString(source.resumeFromStageId, { maxLength: 80, allowEmpty: true }) || null,
+    cancelRequestedAt: sanitizeTrimmedString(source.cancelRequestedAt, { maxLength: 80, allowEmpty: true }) || null
+  };
+}
+
+function sanitizeTimelineMeta(raw) {
+  if (!isPlainObject(raw)) {
+    return { perStage: {} };
+  }
+  return {
+    perStage: isPlainObject(raw.perStage) ? raw.perStage : {}
+  };
+}
+
+function resolveProfileSnapshot({ runType, sourceId, profileId, profileOverrides, freezeSettings, fallback }) {
+  const selectedProfile = profileId ? findRunProfile(profileId) : null;
+  const base = isPlainObject(selectedProfile)
+    ? {
+        profileId: selectedProfile.profileId,
+        name: selectedProfile.name,
+        version: selectedProfile.version,
+        mode: selectedProfile.mode,
+        roles: selectedProfile.roles,
+        stages: selectedProfile.stages,
+        outputPolicy: selectedProfile.outputPolicy,
+        runSafety: selectedProfile.runSafety
+      }
+    : {
+        profileId: null,
+        name: "Ad-hoc",
+        version: 1,
+        mode: "inherit_defaults",
+        roles: {},
+        stages: sanitizeRunProfileStages(undefined, { strict: false }),
+        outputPolicy: {},
+        runSafety: {}
+      };
+
+  const overrides = isPlainObject(profileOverrides) ? profileOverrides : {};
+  const merged = {
+    ...base,
+    ...overrides,
+    roles: isPlainObject(overrides.roles) ? overrides.roles : base.roles,
+    stages: Array.isArray(overrides.stages) ? sanitizeRunProfileStages(overrides.stages, { strict: false }) : base.stages,
+    outputPolicy: isPlainObject(overrides.outputPolicy) ? overrides.outputPolicy : base.outputPolicy,
+    runSafety: isPlainObject(overrides.runSafety) ? overrides.runSafety : base.runSafety,
+    scopeType: runType,
+    scopeId: sourceId,
+    freezeSettings: freezeSettings !== false
+  };
+
+  return merged || fallback || null;
+}
+
 function sanitizeRunStatus(raw, fallback = "queued", { strict = true } = {}) {
   const status = sanitizeTrimmedString(raw, { maxLength: 40 })?.toLowerCase();
   if (!status) {
@@ -996,6 +1252,9 @@ function sanitizeRunCreateInput(raw) {
     metrics: sanitizeRunMetrics(raw?.metrics),
     outputs: sanitizePipelineOutputs(raw?.outputs),
     toolsPolicy: sanitizeToolsPolicy(raw?.toolsPolicy ?? raw?.tools_policy),
+    profileId: sanitizeTrimmedString(raw?.profileId, { maxLength: 120 }) || null,
+    profileOverrides: isPlainObject(raw?.profileOverrides) ? raw.profileOverrides : null,
+    freezeSettings: raw?.freezeSettings === undefined ? true : toBoolean(raw?.freezeSettings, true),
     failedStage: null,
     errorMessage: null,
     errorAt: null
@@ -1024,6 +1283,17 @@ function sanitizeRunCreate(raw) {
     outputs: resolvedOutputs,
     toolsPolicy: resolvedToolsPolicy,
     stageState: buildInitialStageState(pipeline),
+    runType: "pipeline",
+    profileId: input.profileId,
+    profileSnapshot: resolveProfileSnapshot({
+      runType: "pipeline",
+      sourceId: pipelineId,
+      profileId: input.profileId,
+      profileOverrides: input.profileOverrides,
+      freezeSettings: input.freezeSettings
+    }),
+    control: sanitizeRunControl({ status: "queued" }),
+    timelineMeta: sanitizeTimelineMeta(null),
     groupId: null,
     groupSnapshot: null
   };
@@ -1113,6 +1383,23 @@ function sanitizeRunUpdate(raw, previousRun) {
     updates.pipelineId = pipelineId;
   }
 
+  if (raw.profileId !== undefined) {
+    updates.profileId = sanitizeTrimmedString(raw.profileId, { maxLength: 120 }) || null;
+  }
+  if (raw.profileSnapshot !== undefined) {
+    updates.profileSnapshot = isPlainObject(raw.profileSnapshot) ? raw.profileSnapshot : null;
+  }
+  if (raw.runType !== undefined) {
+    const runType = sanitizeTrimmedString(raw.runType, { maxLength: 20 })?.toLowerCase();
+    updates.runType = new Set(["group", "pipeline"]).has(runType) ? runType : previousRun.runType || "pipeline";
+  }
+  if (raw.control !== undefined) {
+    updates.control = sanitizeRunControl(raw.control);
+  }
+  if (raw.timelineMeta !== undefined) {
+    updates.timelineMeta = sanitizeTimelineMeta(raw.timelineMeta);
+  }
+
   return updates;
 }
 
@@ -1128,6 +1415,9 @@ function hydrateRun(raw) {
     pipelineId: fallbackPipelineId || null,
     groupId,
     groupSnapshot: isPlainObject(raw?.groupSnapshot) ? raw.groupSnapshot : null,
+    runType: sanitizeTrimmedString(raw?.runType, { maxLength: 20 })?.toLowerCase() || (groupId ? "group" : "pipeline"),
+    profileId: sanitizeTrimmedString(raw?.profileId, { maxLength: 120 }) || null,
+    profileSnapshot: isPlainObject(raw?.profileSnapshot) ? raw.profileSnapshot : null,
     createdAt: sanitizeTrimmedString(raw?.createdAt, { maxLength: 60 }) || now,
     updatedAt: sanitizeTrimmedString(raw?.updatedAt, { maxLength: 60 }) || now,
     status: sanitizeRunStatus(raw?.status, "queued", { strict: false }),
@@ -1142,6 +1432,8 @@ function hydrateRun(raw) {
     outputs: sanitizePipelineOutputs(raw?.outputs),
     toolsPolicy: sanitizeToolsPolicy(raw?.toolsPolicy ?? raw?.tools_policy),
     stageState: sanitizeStageState(raw?.stageState, pipeline),
+    control: sanitizeRunControl(raw?.control || { status: raw?.status || "queued" }),
+    timelineMeta: sanitizeTimelineMeta(raw?.timelineMeta),
     failedStage: sanitizeTrimmedString(raw?.failedStage, { maxLength: 80, allowEmpty: true }) || null,
     errorMessage: sanitizeTrimmedString(raw?.errorMessage, { maxLength: 4000, allowEmpty: true }) || null,
     errorAt: sanitizeTrimmedString(raw?.errorAt, { maxLength: 80, allowEmpty: true }) || null
@@ -1289,7 +1581,8 @@ async function ensureDataFiles() {
     ensureAgentsFile({ agentsFile: AGENTS_FILE }),
     ensureAgentGroupsFile({ agentGroupsFile: AGENT_GROUPS_FILE }),
     ensurePipelinesFile({ pipelinesFile: PIPELINES_FILE }),
-    ensureRunsFile({ runsFile: RUNS_FILE })
+    ensureRunsFile({ runsFile: RUNS_FILE }),
+    ensureRunProfilesFile({ runProfilesFile: RUN_PROFILES_FILE })
   ]);
 }
 
@@ -1342,6 +1635,12 @@ async function loadRuns() {
   }
 }
 
+async function loadRunProfiles() {
+  const list = await loadRunProfilesFromStore({ runProfilesFile: RUN_PROFILES_FILE });
+  runProfiles = list.map(hydrateRunProfile);
+  runtimeState.runProfiles = runProfiles;
+}
+
 async function saveConfig() {
   await saveConfigToStore({
     configFile: CONFIG_FILE,
@@ -1374,6 +1673,13 @@ async function saveRuns() {
   await saveRunsToStore({
     runsFile: RUNS_FILE,
     runs
+  });
+}
+
+async function saveRunProfiles() {
+  await saveRunProfilesToStore({
+    runProfilesFile: RUN_PROFILES_FILE,
+    runProfiles
   });
 }
 
@@ -1436,9 +1742,13 @@ function runToClient(run) {
     pipelineId: run.pipelineId,
     groupId: run.groupId || null,
     groupSnapshot: run.groupSnapshot || null,
+    runType: run.runType || (run.groupId ? "group" : "pipeline"),
+    profileId: run.profileId || null,
+    profileSnapshot: run.profileSnapshot || null,
     createdAt: run.createdAt,
     updatedAt: run.updatedAt,
     status: run.status,
+    control: run.control || { status: run.status },
     topic: run.topic,
     seedLinks: run.seedLinks,
     brandVoice: run.brandVoice,
@@ -1452,7 +1762,8 @@ function runToClient(run) {
     artifacts: run.artifacts,
     evidence: run.evidence,
     logs: run.logs,
-    metrics: run.metrics
+    metrics: run.metrics,
+    timelineMeta: run.timelineMeta || { perStage: {} }
   };
 }
 
@@ -1879,6 +2190,7 @@ registerApiRoutes(app, {
     getAgentGroups: () => agentGroups,
     getPipelines: () => pipelines,
     getRuns: () => runs,
+    getRunProfiles: () => runProfiles,
     normalizeBaseUrl,
     saveConfig,
     lmStudioJsonRequest,
@@ -1912,6 +2224,9 @@ registerApiRoutes(app, {
     sanitizeTrimmedString,
     sanitizeRunCreateInput,
     buildInitialStageStateFromAgentGroup,
+    resolveProfileSnapshot,
+    sanitizeRunControl,
+    sanitizeTimelineMeta,
     canonicalStages: CANONICAL_PIPELINE_STAGES,
     buildRequestError,
     randomUUID,
@@ -1919,6 +2234,16 @@ registerApiRoutes(app, {
     orchestration,
     agentGroupToClient,
     mergeAgentGroupRunDefaults
+  },
+  runProfiles: {
+    getRunProfiles: () => runProfiles,
+    findRunProfile,
+    sanitizeRunProfile,
+    sanitizeTrimmedString,
+    buildRequestError,
+    saveRunProfiles,
+    runProfileToClient,
+    randomUUID
   },
   pipelines: {
     getPipelines: () => pipelines,
@@ -1960,7 +2285,8 @@ registerApiRoutes(app, {
     randomUUID,
     saveRuns,
     sanitizeRunUpdate,
-    sanitizeRunLogs
+    sanitizeRunLogs,
+    activePipelineRuns
   },
   chat: {
     findAgent,
@@ -1995,6 +2321,7 @@ async function start() {
   await loadAgents();
   await loadAgentGroups();
   await loadPipelines();
+  await loadRunProfiles();
   await loadRuns();
 
   app.listen(PORT, () => {
@@ -2009,12 +2336,14 @@ module.exports = {
     CANONICAL_PIPELINE_STAGES,
     sanitizePipeline,
     sanitizeAgentGroup,
+    sanitizeRunProfile,
     sanitizeRunCreate,
     sanitizeRunCreateInput,
     sanitizeRunUpdate,
     buildInitialStageState,
     buildInitialStageStateFromAgentGroup,
     mergeAgentGroupRunDefaults,
+    resolveProfileSnapshot,
     runToClient,
     pipelineToClient,
     agentGroupToClient,
@@ -2032,13 +2361,17 @@ module.exports = {
         pipelines = nextState.pipelines;
         runtimeState.pipelines = pipelines;
       }
+      if (Array.isArray(nextState.runProfiles)) {
+        runProfiles = nextState.runProfiles;
+        runtimeState.runProfiles = runProfiles;
+      }
       if (Array.isArray(nextState.runs)) {
         runs = nextState.runs;
         runtimeState.runs = runs;
       }
     },
     getTestState() {
-      return { agents, agentGroups, pipelines, runs };
+      return { agents, agentGroups, pipelines, runProfiles, runs };
     }
   }
 };

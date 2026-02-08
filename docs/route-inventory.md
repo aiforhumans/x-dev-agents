@@ -4,7 +4,7 @@ Current backend HTTP routes and expected response shapes.
 
 ## System
 - `GET /api/health`
-  - `200`: `{ ok, baseUrl, nativeApiBaseUrl, agentCount, agentGroupCount, pipelineCount, runCount }`
+  - `200`: `{ ok, baseUrl, nativeApiBaseUrl, agentCount, agentGroupCount, pipelineCount, runCount, runProfileCount }`
 - `GET /api/config`
   - `200`: `{ baseUrl }`
 - `PUT /api/config`
@@ -39,8 +39,23 @@ Current backend HTTP routes and expected response shapes.
 - `DELETE /api/agent-groups/:id`
   - `200`: `{ deleted: true }`
 - `POST /api/agent-groups/:id/run`
-  - Body: run create payload (topic/seedLinks/brandVoice/targetPlatforms/toolsPolicy/outputs)
+  - Body: run create payload (topic/seedLinks/brandVoice/targetPlatforms/toolsPolicy/outputs/profileId/profileOverrides/freezeSettings)
   - `202`: `{ runId }`
+
+## Run Profiles
+- `GET /api/run-profiles`
+  - Query: `scopeType?`, `scopeId?`
+  - `200`: `RunProfileClient[]`
+- `GET /api/run-profiles/:id`
+  - `200`: `RunProfileClient`
+- `POST /api/run-profiles`
+  - Body: run profile payload
+  - `201` create or `200` update-by-id: `RunProfileClient`
+- `PUT /api/run-profiles/:id`
+  - Body: run profile payload
+  - `200`: `RunProfileClient`
+- `DELETE /api/run-profiles/:id`
+  - `200`: `{ deleted: true }`
 
 ## MCP
 - `POST /api/mcp/test`
@@ -61,18 +76,18 @@ Current backend HTTP routes and expected response shapes.
 - `DELETE /api/pipelines/:id`
   - `200`: `{ deleted: true }`
 - `POST /api/pipelines/:id/run`
-  - Body: run create payload (topic/seedLinks/brandVoice/targetPlatforms/toolsPolicy/outputs)
+  - Body: run create payload (topic/seedLinks/brandVoice/targetPlatforms/toolsPolicy/outputs/profileId/profileOverrides/freezeSettings)
   - `202`: `{ runId }`
 
 ## Runs
 - `GET /api/runs`
-  - Query: `pipelineId?`, `status?`, `limit?`
+  - Query: `pipelineId?`, `groupId?`, `runType?`, `profileId?`, `status?`, `limit?`
   - `200`: `RunClient[]`
 - `GET /api/runs/:runId`
   - `200`: `RunClient`
 - `GET /api/runs/:runId/stream`
   - `200`: SSE stream
-  - Events: `run_started`, `stage_started`, `assistant_delta`, `tool_call`, `tool_result`, `artifact_written`, `stage_completed`, `run_completed`, `run_failed`, `heartbeat`
+  - Events: `run_started`, `stage_started`, `assistant_delta`, `tool_call`, `tool_result`, `artifact_written`, `stage_completed`, `run_completed`, `run_failed`, `run_paused`, `run_cancel_requested`, `run_cancelled`, `run_resumed`, `stage_retry_started`, `heartbeat`
 - `POST /api/runs`
   - Body: run create payload
   - `201`: `RunClient`
@@ -82,6 +97,9 @@ Current backend HTTP routes and expected response shapes.
 - `POST /api/runs/:runId/logs`
   - Body: single log item
   - `201`: `RunClient`
+- `POST /api/runs/:runId/control`
+  - Body: `{ action: "cancel"|"pause"|"resume"|"retry_stage", fromStageId?, stageId? }`
+  - `200`: `{ ok, runId, status, acceptedAction }`
 - `DELETE /api/runs/:runId`
   - `200`: `{ deleted: true }`
 

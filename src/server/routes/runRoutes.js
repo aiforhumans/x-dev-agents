@@ -26,7 +26,8 @@ function registerRunRoutes(app, deps) {
     randomUUID,
     saveRuns,
     sanitizeRunUpdate,
-    sanitizeRunLogs
+    sanitizeRunLogs,
+    activePipelineRuns
   } = deps;
 
   app.get("/api/runs", (req, res, next) => {
@@ -34,12 +35,24 @@ function registerRunRoutes(app, deps) {
       const runs = getRuns();
       const query = getQueryObject(req);
       const pipelineId = sanitizeTrimmedString(query.pipelineId, { maxLength: 120 });
+      const groupId = sanitizeTrimmedString(query.groupId, { maxLength: 120 });
+      const runType = sanitizeTrimmedString(query.runType, { maxLength: 40 })?.toLowerCase();
+      const profileId = sanitizeTrimmedString(query.profileId, { maxLength: 120 });
       const statusQuery = sanitizeTrimmedString(query.status, { maxLength: 240 });
       const limit = clamp(toInteger(query.limit, 100), 1, 500);
 
       let list = [...runs];
       if (pipelineId) {
         list = list.filter((run) => run.pipelineId === pipelineId);
+      }
+      if (groupId) {
+        list = list.filter((run) => run.groupId === groupId);
+      }
+      if (runType) {
+        list = list.filter((run) => (run.runType || (run.groupId ? "group" : "pipeline")) === runType);
+      }
+      if (profileId) {
+        list = list.filter((run) => run.profileId === profileId);
       }
 
       if (statusQuery) {
@@ -86,7 +99,8 @@ function registerRunRoutes(app, deps) {
 
       const isTerminal = run.status === "completed" || run.status === "failed" || run.status === "cancelled";
       if (isTerminal) {
-        const terminalEvent = run.status === "completed" ? "run_completed" : "run_failed";
+        const terminalEvent =
+          run.status === "completed" ? "run_completed" : run.status === "cancelled" ? "run_cancelled" : "run_failed";
         writeSse(res, terminalEvent, {
           runId: run.runId,
           pipelineId: run.pipelineId,
@@ -200,6 +214,110 @@ function registerRunRoutes(app, deps) {
       run.updatedAt = new Date().toISOString();
       await saveRuns();
       res.status(201).json(runToClient(run));
+    } catch (error) {
+      next(error);
+    }
+  });
+
+  app.post("/api/runs/:runId/control", async (req, res, next) => {
+    try {
+      const run = findRun(req.params.runId);
+      if (!run) {
+        throw buildRequestError(404, "Run not found.");
+      }
+
+      const body = getBodyObject(req);
+      const action = sanitizeTrimmedString(body.action, { maxLength: 40 })?.toLowerCase();
+      if (!action) {
+        throw buildRequestError(400, "Run control action is required.");
+      }
+
+      if (!run.control || typeof run.control !== "object") {
+        run.control = {
+          status: run.status || "queued",
+          resumeFromStageId: null,
+          cancelRequestedAt: null
+        };
+      }
+
+      if (action === "cancel") {
+        run.control.status = "cancelling";
+        run.control.cancelRequestedAt = new Date().toISOString();
+        run.status = "cancelling";
+        run.updatedAt = run.control.cancelRequestedAt;
+        await saveRuns();
+        orchestration.streamRunEvent(run, "run_cancel_requested", { status: run.status });
+        res.json({ ok: true, runId: run.runId, status: run.status, acceptedAction: action });
+        return;
+      }
+
+      if (action === "pause") {
+        if (run.status !== "running") {
+          throw buildRequestError(400, "Run must be running to pause.");
+        }
+        run.control.status = "paused";
+        run.status = "paused";
+        run.updatedAt = new Date().toISOString();
+        await saveRuns();
+        orchestration.streamRunEvent(run, "run_paused", { status: run.status });
+        res.json({ ok: true, runId: run.runId, status: run.status, acceptedAction: action });
+        return;
+      }
+
+      if (action === "resume") {
+        const fromStageId = sanitizeTrimmedString(body.fromStageId, { maxLength: 80, allowEmpty: true }) || null;
+        run.control.status = "running";
+        run.control.resumeFromStageId = fromStageId;
+        run.status = "running";
+        run.updatedAt = new Date().toISOString();
+        if (!activePipelineRuns.has(run.runId)) {
+          const execution = orchestration.runPipelineOrchestration(run.runId).catch(() => {
+            // orchestration handles error state.
+          });
+          activePipelineRuns.set(run.runId, execution);
+        }
+        await saveRuns();
+        orchestration.streamRunEvent(run, "run_resumed", { status: run.status, fromStageId });
+        res.json({ ok: true, runId: run.runId, status: run.status, acceptedAction: action });
+        return;
+      }
+
+      if (action === "retry_stage") {
+        const stageId = sanitizeTrimmedString(body.stageId, { maxLength: 80 })?.toLowerCase();
+        if (!stageId || !run.stageState?.[stageId]) {
+          throw buildRequestError(400, "A valid stageId is required for retry_stage.");
+        }
+        for (const entry of Object.values(run.stageState || {})) {
+          if (!entry || typeof entry !== "object") {
+            continue;
+          }
+          if (entry.stageId === stageId || entry.status === "failed") {
+            entry.status = "pending";
+            entry.startedAt = null;
+            entry.completedAt = null;
+            entry.error = null;
+          }
+        }
+        run.failedStage = null;
+        run.errorMessage = null;
+        run.errorAt = null;
+        run.control.status = "running";
+        run.control.resumeFromStageId = stageId;
+        run.status = "running";
+        run.updatedAt = new Date().toISOString();
+        await saveRuns();
+        orchestration.streamRunEvent(run, "stage_retry_started", { stageId, status: run.status });
+        if (!activePipelineRuns.has(run.runId)) {
+          const execution = orchestration.runPipelineOrchestration(run.runId).catch(() => {
+            // orchestration handles error state.
+          });
+          activePipelineRuns.set(run.runId, execution);
+        }
+        res.json({ ok: true, runId: run.runId, status: run.status, acceptedAction: action });
+        return;
+      }
+
+      throw buildRequestError(400, `Unsupported run control action: ${action}`);
     } catch (error) {
       next(error);
     }

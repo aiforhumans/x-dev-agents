@@ -5,6 +5,7 @@ module.exports = {
   agentGroups: [],
   pipelines: [],
   runs: [],
+  runProfiles: [],
   config: { baseUrl: DEFAULT_BASE_URL },
   runStreamSubscribers: new Map(),
   activePipelineRuns: new Map()

@@ -106,10 +106,16 @@ p {
 }
 
 .layout {
-  --left-pane-width: 35%;
+  --left-pane-width: 28%;
+  --right-pane-width: 26%;
   --resizer-width: 12px;
   display: grid;
-  grid-template-columns: minmax(360px, var(--left-pane-width)) var(--resizer-width) minmax(560px, 1fr);
+  grid-template-columns:
+    minmax(280px, var(--left-pane-width))
+    var(--resizer-width)
+    minmax(520px, 1fr)
+    var(--resizer-width)
+    minmax(340px, var(--right-pane-width));
   gap: 0.75rem;
   align-items: stretch;
   flex: 1 1 auto;
@@ -164,6 +170,15 @@ p {
   flex-direction: column;
   padding: 0.9rem;
   background: #1b1b1b;
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
+}
+
+#settingsPanel {
+  display: flex;
+  flex-direction: column;
+  padding: 0.9rem;
   min-height: 0;
   height: 100%;
   overflow: hidden;
@@ -308,6 +323,12 @@ button.danger {
   background: #1f1f1f;
 }
 
+.nav-heading {
+  margin: 0.5rem 0 0.34rem;
+  font-size: 0.76rem;
+  color: #c4c4c4;
+}
+
 .agent-group-list {
   list-style: none;
   margin: 0 0 0.75rem;
@@ -399,6 +420,28 @@ button.danger {
 .agent-item.empty {
   color: var(--muted);
   cursor: default;
+}
+
+.run-item {
+  padding: 0.5rem 0.62rem;
+  border-bottom: 1px solid #2d2d2d;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+}
+
+.run-item:last-child {
+  border-bottom: none;
+}
+
+.run-item:hover {
+  background: #292929;
+}
+
+.run-item.selected {
+  background: #2e2e2e;
+  box-shadow: inset 2px 0 0 0 #6aa6ff;
 }
 
 .form {
@@ -801,6 +844,39 @@ button.danger {
   color: #cecece;
 }
 
+.timeline {
+  display: flex;
+  flex-direction: column;
+  gap: 0.75rem;
+}
+
+.timeline-run-header {
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 0.6rem;
+  background: #1f1f1f;
+  font-size: 0.8rem;
+}
+
+.timeline-stage {
+  border: 1px solid #353535;
+  border-radius: 10px;
+  padding: 0.56rem;
+  background: #1f1f1f;
+}
+
+.timeline-stage h4 {
+  margin: 0 0 0.35rem;
+  font-size: 0.84rem;
+}
+
+.timeline-lines {
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.74rem;
+  color: #cccccc;
+  white-space: pre-wrap;
+}
+
 .status {
   margin-top: 0.85rem;
   padding: 0.58rem 0.78rem;
@@ -847,7 +923,8 @@ button.danger {
   }
 
   .agents-panel,
-  .chat-panel {
+  .chat-panel,
+  #settingsPanel {
     min-height: 0;
     height: auto;
     overflow: visible;

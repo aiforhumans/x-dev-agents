@@ -5,9 +5,12 @@ const CREATE_CHAT_UI_FEATURE = APP_CLIENT.features?.createChatUiFeature;
 const STREAM_SSE_FEATURE = APP_CLIENT.features?.streamSse;
 const GROUP_STATE_PREFIX = APP_CLIENT.uiKeys?.agentFormGroupStatePrefix || "ui.agentForm.groupState.";
 const LEFT_PANE_WIDTH_STORAGE_KEY = APP_CLIENT.uiKeys?.leftPaneWidthPx || "ui.layout.leftPaneWidthPx";
+const NAV_PANE_WIDTH_STORAGE_KEY = "ui.layout.navPaneWidthPx";
+const SETTINGS_PANE_WIDTH_STORAGE_KEY = "ui.layout.settingsPaneWidthPx";
 const NEW_AGENT_GROUP_KEY = APP_CLIENT.uiKeys?.newAgentGroupStateId || "__new__";
 const MIN_LEFT_PANE_WIDTH = 360;
 const MIN_RIGHT_PANE_WIDTH = 560;
+const MIN_SETTINGS_PANE_WIDTH = 320;
 const DESKTOP_BREAKPOINT = 1080;
 const SMALL_SCREEN_BREAKPOINT = 760;
 const RESIZER_WIDTH = 12;
@@ -31,8 +34,12 @@ const state = {
   models: [],
   agents: [],
   agentGroups: [],
+  pipelines: [],
+  runs: [],
   selectedAgentId: null,
   selectedAgentGroupId: null,
+  selectedPipelineId: null,
+  selectedRunId: null,
   selectedGroupRunId: null,
   selectedGroupRunStatus: "idle",
   selectedGroupRunStageState: null,
@@ -42,6 +49,7 @@ const state = {
   chatHistory: [],
   isStreaming: false,
   leftPaneWidthPx: null,
+  settingsPaneWidthPx: null,
   pendingImages: [],
   attachmentPreviewUrls: [],
   shouldStickToBottom: true
@@ -58,11 +66,17 @@ const elements = {
   layout: document.getElementById("layout"),
   agentsPanel: document.getElementById("agentsPanel"),
   chatPanel: document.getElementById("chatPanel"),
+  settingsPanel: document.getElementById("settingsPanel"),
   layoutResizer: document.getElementById("layoutResizer"),
+  layoutResizerRight: document.getElementById("layoutResizerRight"),
   baseUrlInput: document.getElementById("baseUrlInput"),
   saveBaseUrlBtn: document.getElementById("saveBaseUrlBtn"),
   testConnectionBtn: document.getElementById("testConnectionBtn"),
   agentList: document.getElementById("agentList"),
+  pipelineList: document.getElementById("pipelineList"),
+  runList: document.getElementById("runList"),
+  modelListQuick: document.getElementById("modelListQuick"),
+  systemDiagnostics: document.getElementById("systemDiagnostics"),
   agentGroupList: document.getElementById("agentGroupList"),
   agentGroupForm: document.getElementById("agentGroupForm"),
   agentGroupId: document.getElementById("agentGroupId"),
@@ -79,6 +93,11 @@ const elements = {
   newAgentGroupBtn: document.getElementById("newAgentGroupBtn"),
   saveAgentGroupBtn: document.getElementById("saveAgentGroupBtn"),
   runAgentGroupBtn: document.getElementById("runAgentGroupBtn"),
+  runPipelineBtn: document.getElementById("runPipelineBtn"),
+  pauseRunBtn: document.getElementById("pauseRunBtn"),
+  resumeRunBtn: document.getElementById("resumeRunBtn"),
+  cancelRunBtn: document.getElementById("cancelRunBtn"),
+  retryRunBtn: document.getElementById("retryRunBtn"),
   deleteAgentGroupBtn: document.getElementById("deleteAgentGroupBtn"),
   newAgentBtn: document.getElementById("newAgentBtn"),
   agentForm: document.getElementById("agentForm"),
@@ -302,7 +321,19 @@ function saveGroupStateForCurrentAgent() {
 
 function clampPaneWidthPx(widthPx, containerWidth) {
   const minWidth = MIN_LEFT_PANE_WIDTH;
-  const maxWidth = Math.max(minWidth, containerWidth - MIN_RIGHT_PANE_WIDTH - RESIZER_WIDTH);
+  const maxWidth = Math.max(
+    minWidth,
+    containerWidth - MIN_RIGHT_PANE_WIDTH - MIN_SETTINGS_PANE_WIDTH - RESIZER_WIDTH * 2
+  );
+  return Math.min(maxWidth, Math.max(minWidth, widthPx));
+}
+
+function clampSettingsPaneWidthPx(widthPx, containerWidth) {
+  const minWidth = MIN_SETTINGS_PANE_WIDTH;
+  const maxWidth = Math.max(
+    minWidth,
+    containerWidth - MIN_RIGHT_PANE_WIDTH - MIN_LEFT_PANE_WIDTH - RESIZER_WIDTH * 2
+  );
   return Math.min(maxWidth, Math.max(minWidth, widthPx));
 }
 
@@ -317,11 +348,29 @@ function updateResizerAria(layoutWidth) {
   if (!elements.layoutResizer || typeof elements.layoutResizer.setAttribute !== "function") {
     return;
   }
-  const maxWidth = Math.max(MIN_LEFT_PANE_WIDTH, layoutWidth - MIN_RIGHT_PANE_WIDTH - RESIZER_WIDTH);
+  const maxWidth = Math.max(
+    MIN_LEFT_PANE_WIDTH,
+    layoutWidth - MIN_RIGHT_PANE_WIDTH - MIN_SETTINGS_PANE_WIDTH - RESIZER_WIDTH * 2
+  );
   elements.layoutResizer.setAttribute("aria-valuemin", String(MIN_LEFT_PANE_WIDTH));
   elements.layoutResizer.setAttribute("aria-valuemax", String(Math.round(maxWidth)));
   if (Number.isFinite(state.leftPaneWidthPx)) {
     elements.layoutResizer.setAttribute("aria-valuenow", String(Math.round(state.leftPaneWidthPx)));
+  }
+}
+
+function updateRightResizerAria(layoutWidth) {
+  if (!elements.layoutResizerRight || typeof elements.layoutResizerRight.setAttribute !== "function") {
+    return;
+  }
+  const maxWidth = Math.max(
+    MIN_SETTINGS_PANE_WIDTH,
+    layoutWidth - MIN_RIGHT_PANE_WIDTH - MIN_LEFT_PANE_WIDTH - RESIZER_WIDTH * 2
+  );
+  elements.layoutResizerRight.setAttribute("aria-valuemin", String(MIN_SETTINGS_PANE_WIDTH));
+  elements.layoutResizerRight.setAttribute("aria-valuemax", String(Math.round(maxWidth)));
+  if (Number.isFinite(state.settingsPaneWidthPx)) {
+    elements.layoutResizerRight.setAttribute("aria-valuenow", String(Math.round(state.settingsPaneWidthPx)));
   }
 }
 
@@ -333,6 +382,20 @@ function applyLeftPaneWidth(widthPx) {
   state.leftPaneWidthPx = Math.round(widthPx);
   const layoutWidth = getLayoutWidth();
   if (layoutWidth) {
+    updateResizerAria(layoutWidth);
+    updateRightResizerAria(layoutWidth);
+  }
+}
+
+function applySettingsPaneWidth(widthPx) {
+  if (!elements.layout || !elements.layout.style || typeof elements.layout.style.setProperty !== "function") {
+    return;
+  }
+  elements.layout.style.setProperty("--right-pane-width", `${Math.round(widthPx)}px`);
+  state.settingsPaneWidthPx = Math.round(widthPx);
+  const layoutWidth = getLayoutWidth();
+  if (layoutWidth) {
+    updateRightResizerAria(layoutWidth);
     updateResizerAria(layoutWidth);
   }
 }
@@ -353,11 +416,42 @@ function loadLeftPaneWidth() {
   applyLeftPaneWidth(clampPaneWidthPx(raw, layoutWidth));
 }
 
+function loadSettingsPaneWidth() {
+  if (!isDesktopLayout()) {
+    return;
+  }
+  const raw = Number(getFromLocalStorage(SETTINGS_PANE_WIDTH_STORAGE_KEY));
+  if (!Number.isFinite(raw)) {
+    const legacy = Number(getFromLocalStorage(NAV_PANE_WIDTH_STORAGE_KEY));
+    if (Number.isFinite(legacy)) {
+      const layoutWidth = getLayoutWidth();
+      if (layoutWidth) {
+        applyLeftPaneWidth(clampPaneWidthPx(legacy, layoutWidth));
+      }
+    }
+    return;
+  }
+  const layoutWidth = getLayoutWidth();
+  if (!layoutWidth) {
+    return;
+  }
+  applySettingsPaneWidth(clampSettingsPaneWidthPx(raw, layoutWidth));
+}
+
 function saveLeftPaneWidth() {
   if (!Number.isFinite(state.leftPaneWidthPx)) {
     return;
   }
-  scheduleLocalStorageWrite(LEFT_PANE_WIDTH_STORAGE_KEY, String(Math.round(state.leftPaneWidthPx)));
+  const value = String(Math.round(state.leftPaneWidthPx));
+  scheduleLocalStorageWrite(LEFT_PANE_WIDTH_STORAGE_KEY, value);
+  scheduleLocalStorageWrite(NAV_PANE_WIDTH_STORAGE_KEY, value);
+}
+
+function saveSettingsPaneWidth() {
+  if (!Number.isFinite(state.settingsPaneWidthPx)) {
+    return;
+  }
+  scheduleLocalStorageWrite(SETTINGS_PANE_WIDTH_STORAGE_KEY, String(Math.round(state.settingsPaneWidthPx)));
 }
 
 function initializeResizableLayout() {
@@ -366,9 +460,11 @@ function initializeResizableLayout() {
   }
 
   loadLeftPaneWidth();
+  loadSettingsPaneWidth();
   const initialLayoutWidth = getLayoutWidth();
   if (initialLayoutWidth) {
     updateResizerAria(initialLayoutWidth);
+    updateRightResizerAria(initialLayoutWidth);
   }
 
   const stopDragging = () => {
@@ -379,6 +475,7 @@ function initializeResizableLayout() {
       window.removeEventListener("pointercancel", stopDragging);
     }
     saveLeftPaneWidth();
+    saveSettingsPaneWidth();
   };
 
   const onPointerMove = (event) => {
@@ -410,6 +507,77 @@ function initializeResizableLayout() {
       window.addEventListener("pointercancel", stopDragging);
     }
   });
+
+  const onPointerMoveRight = (event) => {
+    if (!isDesktopLayout()) {
+      return;
+    }
+    const layoutWidth = getLayoutWidth();
+    if (!layoutWidth || typeof elements.layout.getBoundingClientRect !== "function") {
+      return;
+    }
+    const layoutRect = elements.layout.getBoundingClientRect();
+    const widthFromRight = layoutRect.right - event.clientX;
+    const nextWidth = clampSettingsPaneWidthPx(widthFromRight, layoutWidth);
+    applySettingsPaneWidth(nextWidth);
+  };
+
+  const stopDraggingRight = () => {
+    elements.layout.classList.remove("resizing");
+    if (typeof window !== "undefined" && typeof window.removeEventListener === "function") {
+      window.removeEventListener("pointermove", onPointerMoveRight);
+      window.removeEventListener("pointerup", stopDraggingRight);
+      window.removeEventListener("pointercancel", stopDraggingRight);
+    }
+    saveSettingsPaneWidth();
+  };
+
+  if (elements.layoutResizerRight && typeof elements.layoutResizerRight.addEventListener === "function") {
+    elements.layoutResizerRight.addEventListener("pointerdown", (event) => {
+      if (!isDesktopLayout()) {
+        return;
+      }
+      if (typeof event.preventDefault === "function") {
+        event.preventDefault();
+      }
+      elements.layout.classList.add("resizing");
+      if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
+        window.addEventListener("pointermove", onPointerMoveRight);
+        window.addEventListener("pointerup", stopDraggingRight);
+        window.addEventListener("pointercancel", stopDraggingRight);
+      }
+    });
+
+    elements.layoutResizerRight.addEventListener("keydown", (event) => {
+      if (!isDesktopLayout()) {
+        return;
+      }
+      const layoutWidth = getLayoutWidth();
+      if (!layoutWidth) {
+        return;
+      }
+      const currentWidth = Number.isFinite(state.settingsPaneWidthPx)
+        ? state.settingsPaneWidthPx
+        : clampSettingsPaneWidthPx(Math.round(layoutWidth * 0.26), layoutWidth);
+      const fineStep = 24;
+      const coarseStep = 96;
+      let nextWidth = currentWidth;
+      if (event.key === "ArrowLeft") {
+        nextWidth = currentWidth + (event.shiftKey ? coarseStep : fineStep);
+      } else if (event.key === "ArrowRight") {
+        nextWidth = currentWidth - (event.shiftKey ? coarseStep : fineStep);
+      } else if (event.key === "Home") {
+        nextWidth = MIN_SETTINGS_PANE_WIDTH;
+      } else {
+        return;
+      }
+      if (typeof event.preventDefault === "function") {
+        event.preventDefault();
+      }
+      applySettingsPaneWidth(clampSettingsPaneWidthPx(nextWidth, layoutWidth));
+      saveSettingsPaneWidth();
+    });
+  }
 
   elements.layoutResizer.addEventListener("keydown", (event) => {
     if (!isDesktopLayout()) {
@@ -459,7 +627,11 @@ function initializeResizableLayout() {
         return;
       }
       applyLeftPaneWidth(clampPaneWidthPx(state.leftPaneWidthPx, layoutWidth));
+      if (Number.isFinite(state.settingsPaneWidthPx)) {
+        applySettingsPaneWidth(clampSettingsPaneWidthPx(state.settingsPaneWidthPx, layoutWidth));
+      }
       updateResizerAria(layoutWidth);
+      updateRightResizerAria(layoutWidth);
     });
   }
 }
@@ -592,6 +764,73 @@ function renderAgentGroupList() {
       </li>`;
     })
     .join("");
+}
+
+function renderPipelineList() {
+  if (!elements.pipelineList) {
+    return;
+  }
+  if (!state.pipelines.length) {
+    elements.pipelineList.innerHTML = '<li class="agent-item empty">No pipelines.</li>';
+    return;
+  }
+  elements.pipelineList.innerHTML = state.pipelines
+    .map((pipeline) => {
+      const selected = pipeline.id === state.selectedPipelineId ? "selected" : "";
+      return `<li class="agent-item ${selected}" data-pipeline-id="${escapeHtml(pipeline.id)}">
+        <strong>${escapeHtml(pipeline.name || "Untitled Pipeline")}</strong>
+        <small>${escapeHtml(pipeline.description || "pipeline")}</small>
+      </li>`;
+    })
+    .join("");
+}
+
+function renderRunList() {
+  if (!elements.runList) {
+    return;
+  }
+  if (!state.runs.length) {
+    elements.runList.innerHTML = '<li class="agent-item empty">No runs.</li>';
+    return;
+  }
+  elements.runList.innerHTML = state.runs
+    .map((run) => {
+      const selected = run.runId === state.selectedRunId ? "selected" : "";
+      const type = run.runType || (run.groupId ? "group" : "pipeline");
+      return `<li class="run-item ${selected}" data-run-id="${escapeHtml(run.runId)}">
+        <strong>${escapeHtml(run.topic || run.runId)}</strong>
+        <small>${escapeHtml(type)} | ${escapeHtml(run.status || "unknown")}</small>
+      </li>`;
+    })
+    .join("");
+}
+
+function renderModelListQuick() {
+  if (!elements.modelListQuick) {
+    return;
+  }
+  if (!state.models.length) {
+    elements.modelListQuick.innerHTML = '<li class="agent-item empty">No models loaded.</li>';
+    return;
+  }
+  elements.modelListQuick.innerHTML = state.models
+    .slice(0, 8)
+    .map((model) => `<li class="agent-item"><strong>${escapeHtml(model)}</strong></li>`)
+    .join("");
+}
+
+function renderSystemDiagnostics() {
+  if (!elements.systemDiagnostics) {
+    return;
+  }
+  const lines = [
+    `agents: ${state.agents.length}`,
+    `groups: ${state.agentGroups.length}`,
+    `pipelines: ${state.pipelines.length}`,
+    `runs: ${state.runs.length}`,
+    `models: ${state.models.length}`
+  ];
+  elements.systemDiagnostics.textContent = lines.join("\n");
 }
 
 function resetAgentGroupForm() {
@@ -744,9 +983,25 @@ function applyGroupRunSnapshot(run) {
   if (!run || typeof run !== "object") {
     return;
   }
+  const index = state.runs.findIndex((item) => item.runId === run.runId);
+  if (index === -1) {
+    state.runs.unshift(run);
+  } else {
+    state.runs[index] = {
+      ...state.runs[index],
+      ...run
+    };
+  }
+  renderRunList();
+  if (!state.selectedRunId) {
+    state.selectedRunId = run.runId;
+  }
   state.selectedGroupRunStatus = String(run.status || state.selectedGroupRunStatus || "unknown");
   if (run.stageState && typeof run.stageState === "object") {
     state.selectedGroupRunStageState = run.stageState;
+  }
+  if (state.selectedRunId === run.runId) {
+    renderRunTimeline(getSelectedRun());
   }
   renderGroupRunStatus();
 }
@@ -828,6 +1083,17 @@ async function trackGroupRun(runId) {
       if (data.stageState && typeof data.stageState === "object") {
         state.selectedGroupRunStageState = data.stageState;
       }
+      const run = getSelectedRun();
+      if (run && run.runId === normalizedRunId) {
+        if (data.status) {
+          run.status = String(data.status);
+        }
+        if (data.stageState && typeof data.stageState === "object") {
+          run.stageState = data.stageState;
+        } else if (data.stageId && run.stageState && run.stageState[data.stageId] && data.stage) {
+          run.stageState[data.stageId] = { ...run.stageState[data.stageId], ...data.stage };
+        }
+      }
 
       if (eventName === "stage_started") {
         pushGroupRunEventLine(`stage_started: ${String(data.stageId || "unknown")}`);
@@ -838,11 +1104,23 @@ async function trackGroupRun(runId) {
       } else if (eventName === "run_failed") {
         state.selectedGroupRunStatus = "failed";
         pushGroupRunEventLine(`run_failed: ${String(data.error || "unknown error")}`);
+      } else if (eventName === "run_cancelled") {
+        state.selectedGroupRunStatus = "cancelled";
+        pushGroupRunEventLine("run_cancelled");
+      } else if (eventName === "run_paused") {
+        state.selectedGroupRunStatus = "paused";
+        pushGroupRunEventLine("run_paused");
+      } else if (eventName === "run_resumed") {
+        state.selectedGroupRunStatus = "running";
+        pushGroupRunEventLine("run_resumed");
       } else if (eventName === "run_completed") {
         state.selectedGroupRunStatus = "completed";
         pushGroupRunEventLine("run_completed");
       }
 
+      if (state.selectedRunId === normalizedRunId) {
+        renderRunTimeline(getSelectedRun());
+      }
       renderGroupRunStatus();
     }
   } catch (error) {
@@ -977,6 +1255,64 @@ function renderAgentDiagnostics(stats, responseId = null) {
     sections.push(statsText);
   }
   elements.agentLastStats.textContent = sections.length ? sections.join("\n") : "No diagnostics yet.";
+}
+
+function getSelectedRun() {
+  return state.runs.find((run) => run.runId === state.selectedRunId) || null;
+}
+
+function renderRunTimeline(run) {
+  if (!elements.chatLog) {
+    return;
+  }
+  if (!run) {
+    elements.chatLog.innerHTML = '<div class="message"><span class="meta">Select a run from the left panel.</span></div>';
+    return;
+  }
+
+  const runType = run.runType || (run.groupId ? "group" : "pipeline");
+  const header = `<div class="timeline-run-header">
+    <div><strong>${escapeHtml(run.topic || "Run")}</strong></div>
+    <div>runId: ${escapeHtml(run.runId)}</div>
+    <div>type: ${escapeHtml(runType)} | status: ${escapeHtml(run.status || "unknown")}</div>
+    <div>started: ${escapeHtml(run.createdAt || "")}</div>
+  </div>`;
+
+  const stages = Object.values(run.stageState || {})
+    .map((entry) => {
+      const meta = run.timelineMeta?.perStage?.[entry.stageId] || {};
+      const statsLine = meta?.tokenStats ? formatStats(meta.tokenStats) : "";
+      const lines = [
+        `role: ${entry.role || "n/a"}`,
+        `status: ${entry.status || "pending"}`,
+        entry.agentId ? `agent: ${entry.agentId}` : "",
+        meta.durationMs !== undefined && meta.durationMs !== null ? `duration_ms: ${meta.durationMs}` : "",
+        meta.toolCount !== undefined ? `tool_count: ${meta.toolCount}` : "",
+        statsLine ? `stats: ${statsLine}` : "",
+        Array.isArray(entry.artifacts) && entry.artifacts.length ? `artifacts: ${entry.artifacts.join(", ")}` : "",
+        entry.error ? `error: ${entry.error}` : ""
+      ]
+        .filter(Boolean)
+        .join("\n");
+
+      return `<section class="timeline-stage">
+        <h4>${escapeHtml(entry.name || entry.stageId || "Stage")}</h4>
+        <div class="timeline-lines">${escapeHtml(lines)}</div>
+      </section>`;
+    })
+    .join("");
+
+  const evidence = Array.isArray(run.evidence) && run.evidence.length
+    ? `<section class="timeline-stage"><h4>Evidence</h4><div class="timeline-lines">${escapeHtml(
+        run.evidence
+          .slice(0, 20)
+          .map((item) => `- ${item.title || item.url || "source"} | ${item.url || ""}`)
+          .join("\n")
+      )}</div></section>`
+    : "";
+
+  elements.chatLog.innerHTML = `<div class="timeline">${header}${stages}${evidence}</div>`;
+  syncChatScrollState();
 }
 
 function stringifyDisplayValue(value) {
@@ -1599,6 +1935,8 @@ async function loadModels() {
   state.models = Array.isArray(payload.models) ? payload.models : [];
   const selected = getSelectedAgent();
   renderModelOptions(selected?.model || "");
+  renderModelListQuick();
+  renderSystemDiagnostics();
 }
 
 async function loadAgents() {
@@ -1611,6 +1949,7 @@ async function loadAgents() {
   }
   renderAgentList();
   renderGroupAgentOptions();
+  renderSystemDiagnostics();
 }
 
 async function loadAgentGroups() {
@@ -1622,6 +1961,31 @@ async function loadAgentGroups() {
     state.selectedAgentGroupId = null;
   }
   renderAgentGroupList();
+  renderSystemDiagnostics();
+}
+
+async function loadPipelines() {
+  const payload = await api("/api/pipelines");
+  state.pipelines = Array.isArray(payload) ? payload : [];
+  if (!state.selectedPipelineId && state.pipelines.length) {
+    state.selectedPipelineId = state.pipelines[0].id;
+  } else if (!state.pipelines.some((pipeline) => pipeline.id === state.selectedPipelineId)) {
+    state.selectedPipelineId = null;
+  }
+  renderPipelineList();
+  renderSystemDiagnostics();
+}
+
+async function loadRuns() {
+  const payload = await api("/api/runs?limit=200");
+  state.runs = Array.isArray(payload) ? payload : [];
+  if (!state.selectedRunId && state.runs.length) {
+    state.selectedRunId = state.runs[0].runId;
+  } else if (!state.runs.some((run) => run.runId === state.selectedRunId)) {
+    state.selectedRunId = null;
+  }
+  renderRunList();
+  renderSystemDiagnostics();
 }
 
 async function loadHistory() {
@@ -1908,8 +2272,11 @@ async function initialize() {
   try {
     await loadAgents();
     await loadAgentGroups();
+    await loadPipelines();
+    await loadRuns();
     const selected = getSelectedAgent();
     const selectedGroup = getSelectedAgentGroup();
+    const selectedRun = getSelectedRun();
     if (selected) {
       fillAgentForm(selected);
       loadGroupStateForCurrentAgent();
@@ -1923,6 +2290,10 @@ async function initialize() {
       fillAgentGroupForm(selectedGroup);
     } else {
       resetAgentGroupForm();
+    }
+    renderRunTimeline(selectedRun);
+    if (selectedRun) {
+      await trackGroupRun(selectedRun.runId);
     }
   } catch (error) {
     setStatus(error.message, true);
@@ -1991,6 +2362,41 @@ function bindEvents() {
       setStatus(error.message, true);
     }
   });
+
+  if (elements.pipelineList) {
+    elements.pipelineList.addEventListener("click", (event) => {
+      if (!event.target || typeof event.target.closest !== "function") {
+        return;
+      }
+      const item = event.target.closest("[data-pipeline-id]");
+      if (!item) {
+        return;
+      }
+      state.selectedPipelineId = item.dataset.pipelineId;
+      renderPipelineList();
+      setStatus("Pipeline selected.");
+    });
+  }
+
+  if (elements.runList) {
+    elements.runList.addEventListener("click", async (event) => {
+      if (!event.target || typeof event.target.closest !== "function") {
+        return;
+      }
+      const item = event.target.closest("[data-run-id]");
+      if (!item) {
+        return;
+      }
+      state.selectedRunId = item.dataset.runId;
+      renderRunList();
+      const run = getSelectedRun();
+      renderRunTimeline(run);
+      if (run) {
+        await trackGroupRun(run.runId);
+      }
+      setStatus("Run selected.");
+    });
+  }
 
   if (elements.agentGroupList) {
     elements.agentGroupList.addEventListener("click", (event) => {
@@ -2147,6 +2553,9 @@ function bindEvents() {
           method: "POST",
           body: JSON.stringify({ topic })
         });
+        await loadRuns();
+        state.selectedRunId = payload.runId;
+        renderRunList();
         await trackGroupRun(payload.runId);
         setStatus(`Group run started: ${payload.runId}`);
       } catch (error) {
@@ -2155,6 +2564,86 @@ function bindEvents() {
         elements.runAgentGroupBtn.disabled = false;
         elements.runAgentGroupBtn.textContent = original;
       }
+    });
+  }
+
+  if (elements.runPipelineBtn) {
+    elements.runPipelineBtn.addEventListener("click", async () => {
+      const pipeline = state.pipelines.find((entry) => entry.id === state.selectedPipelineId);
+      if (!pipeline) {
+        setStatus("Select a pipeline first.", true);
+        return;
+      }
+      const topic = String(elements.groupRunTopic?.value || "").trim();
+      if (!topic) {
+        setStatus("Run topic is required.", true);
+        return;
+      }
+      try {
+        const payload = await api(`/api/pipelines/${pipeline.id}/run`, {
+          method: "POST",
+          body: JSON.stringify({ topic })
+        });
+        await loadRuns();
+        state.selectedRunId = payload.runId;
+        renderRunList();
+        await trackGroupRun(payload.runId);
+        setStatus(`Pipeline run started: ${payload.runId}`);
+      } catch (error) {
+        setStatus(error.message, true);
+      }
+    });
+  }
+
+  async function controlSelectedRun(action, extra = {}) {
+    const run = getSelectedRun();
+    if (!run) {
+      setStatus("Select a run first.", true);
+      return;
+    }
+    try {
+      const payload = await api(`/api/runs/${run.runId}/control`, {
+        method: "POST",
+        body: JSON.stringify({ action, ...extra })
+      });
+      await loadRuns();
+      await trackGroupRun(payload.runId);
+      setStatus(`Run control accepted: ${payload.acceptedAction}`);
+    } catch (error) {
+      setStatus(error.message, true);
+    }
+  }
+
+  if (elements.pauseRunBtn) {
+    elements.pauseRunBtn.addEventListener("click", () => {
+      controlSelectedRun("pause");
+    });
+  }
+
+  if (elements.resumeRunBtn) {
+    elements.resumeRunBtn.addEventListener("click", () => {
+      controlSelectedRun("resume");
+    });
+  }
+
+  if (elements.cancelRunBtn) {
+    elements.cancelRunBtn.addEventListener("click", () => {
+      controlSelectedRun("cancel");
+    });
+  }
+
+  if (elements.retryRunBtn) {
+    elements.retryRunBtn.addEventListener("click", () => {
+      const run = getSelectedRun();
+      if (!run) {
+        setStatus("Select a run first.", true);
+        return;
+      }
+      const failedStage =
+        String(run.failedStage || "").trim() ||
+        Object.values(run.stageState || {}).find((entry) => entry?.status === "failed")?.stageId ||
+        "discovery";
+      controlSelectedRun("retry_stage", { stageId: failedStage });
     });
   }
 

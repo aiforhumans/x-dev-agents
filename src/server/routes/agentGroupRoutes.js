@@ -18,6 +18,9 @@ function registerAgentGroupRoutes(app, deps) {
     sanitizeTrimmedString,
     sanitizeRunCreateInput,
     buildInitialStageStateFromAgentGroup,
+    resolveProfileSnapshot,
+    sanitizeRunControl,
+    sanitizeTimelineMeta,
     canonicalStages,
     buildRequestError,
     randomUUID,
@@ -149,6 +152,17 @@ function registerAgentGroupRoutes(app, deps) {
         pipelineId: null,
         ...runInput,
         status: "queued",
+        runType: "group",
+        profileId: runInput.profileId || null,
+        profileSnapshot: resolveProfileSnapshot({
+          runType: "group",
+          sourceId: group.groupId,
+          profileId: runInput.profileId,
+          profileOverrides: runInput.profileOverrides,
+          freezeSettings: runInput.freezeSettings
+        }),
+        control: sanitizeRunControl({ status: "queued" }),
+        timelineMeta: sanitizeTimelineMeta(null),
         groupId: group.groupId,
         groupSnapshot: {
           groupId: group.groupId,

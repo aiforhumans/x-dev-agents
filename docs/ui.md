@@ -1,13 +1,19 @@
 # UI Behavior Notes
 
 ## Layout
-- Desktop uses a fixed-height split pane (`agents` left, `chat` right).
-- The divider supports drag and keyboard resizing:
+- Desktop uses a fixed-height three-pane layout:
+  - left: navigation (`Agent Groups`, `Agents`, `Pipelines`, `Runs`, `Models`, `Diagnostics`)
+  - center: output timeline/main chat surface
+  - right: settings/control (`Group/Profile`, role mapping, run controls, agent settings)
+- Both dividers support drag and keyboard resizing:
   - `ArrowLeft` / `ArrowRight` moves pane width
   - `Shift + Arrow` moves in larger increments
   - `Home` snaps to min width
   - `End` snaps to max width
-- Left pane width persists in localStorage key: `ui.layout.leftPaneWidthPx`.
+- Pane widths persist in:
+  - `ui.layout.leftPaneWidthPx` (legacy-compatible)
+  - `ui.layout.navPaneWidthPx`
+  - `ui.layout.settingsPaneWidthPx`
 
 ## Agent Form Groups
 - Foldable groups:
@@ -25,10 +31,18 @@
 - Legacy stored group schema is mapped forward for compatibility.
 
 ## Chat Thread
-- Scrollbar is visually hidden but native scrolling remains enabled.
-- Chat auto-sticks to bottom while reading latest content.
+- Center timeline/chat scrollbar is visually hidden but native scrolling remains enabled.
+- Timeline auto-sticks to bottom while reading latest content.
 - If the user scrolls up, a `Jump to latest` control appears.
 - Streaming preview rendering is frame-coalesced to reduce layout churn.
+
+## Run Timeline
+- Left `Runs` selection pins the center panel to that run.
+- Center timeline renders:
+  - run header (runId/type/status/start time)
+  - stage cards (status, agent, artifacts, stats)
+  - evidence block (sources/citations)
+- Group and pipeline runs are both stream-tracked via `/api/runs/:runId/stream`.
 
 ## Attachments
 - Composer `+` supports multiple image attachments.

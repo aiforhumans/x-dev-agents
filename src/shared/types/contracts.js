@@ -51,7 +51,7 @@
  */
 
 /**
- * @typedef {"run_started"|"stage_started"|"assistant_delta"|"tool_call"|"tool_result"|"artifact_written"|"stage_completed"|"run_completed"|"run_failed"|"heartbeat"} RunEventType
+ * @typedef {"run_started"|"stage_started"|"assistant_delta"|"tool_call"|"tool_result"|"artifact_written"|"stage_completed"|"run_completed"|"run_failed"|"run_paused"|"run_cancel_requested"|"run_cancelled"|"run_resumed"|"stage_retry_started"|"heartbeat"} RunEventType
  */
 
 /**
@@ -112,6 +112,11 @@ function isRunEventType(value) {
     "stage_completed",
     "run_completed",
     "run_failed",
+    "run_paused",
+    "run_cancel_requested",
+    "run_cancelled",
+    "run_resumed",
+    "stage_retry_started",
     "heartbeat"
   ]);
   return valid.has(String(value || ""));
