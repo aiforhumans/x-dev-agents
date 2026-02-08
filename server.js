@@ -16,6 +16,9 @@ const {
 } = require("./src/server/config/constants");
 const logger = require("./src/server/utils/logger");
 const runtimeState = require("./src/server/state/runtimeState");
+const { createLmStudioClient, parseJsonResponse } = require("./src/server/services/lmstudioClient");
+const { parseSseBlock } = require("./src/server/services/lmstudioStreamParser");
+const { openSse, sendEvent, closeSse } = require("./src/server/sse/sseHelpers");
 const {
   ensureConfigFile: ensureConfigFileInStore,
   loadConfig: loadConfigFromStore,
@@ -1264,50 +1267,18 @@ function buildRequestError(status, message) {
   return error;
 }
 
-async function parseJsonResponse(response) {
-  const text = await response.text();
-  if (!text) {
-    return {};
-  }
-  try {
-    return JSON.parse(text);
-  } catch {
-    return { raw: text };
-  }
-}
+const lmStudioClient = createLmStudioClient({
+  getNativeApiBaseUrl,
+  getOpenAIBaseUrl,
+  buildRequestError
+});
 
 async function lmStudioJsonRequest({ endpoint, method = "GET", body = null, native = true }) {
-  const baseUrl = native ? getNativeApiBaseUrl() : getOpenAIBaseUrl();
-  const response = await fetch(`${baseUrl}${endpoint}`, {
-    method,
-    headers: {
-      "Content-Type": "application/json"
-    },
-    body: body ? JSON.stringify(body) : undefined
-  });
-
-  const payload = await parseJsonResponse(response);
-  if (!response.ok) {
-    const message =
-      payload?.error?.message ||
-      payload?.error ||
-      payload?.message ||
-      `LM Studio request failed (${response.status}).`;
-    throw buildRequestError(response.status, String(message));
-  }
-
-  return payload;
+  return lmStudioClient.jsonRequest({ endpoint, method, body, native });
 }
 
 async function lmStudioStreamRequest({ endpoint, body }) {
-  const baseUrl = getNativeApiBaseUrl();
-  return fetch(`${baseUrl}${endpoint}`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify(body)
-  });
+  return lmStudioClient.streamRequest({ endpoint, body });
 }
 
 function normalizeMessageParts(message, messageParts) {
@@ -1657,42 +1628,7 @@ function applyChatResult(agent, userHistoryItem, result) {
 }
 
 function writeSse(res, event, data) {
-  res.write(`event: ${event}\n`);
-  if (data !== undefined) {
-    const serialized = typeof data === "string" ? data : JSON.stringify(data);
-    res.write(`data: ${serialized}\n`);
-  }
-  res.write("\n");
-}
-
-function parseSseBlock(block) {
-  const lines = block.split(/\r?\n/);
-  let event = "message";
-  const dataLines = [];
-
-  for (const line of lines) {
-    if (line.startsWith("event:")) {
-      event = line.slice(6).trim() || "message";
-      continue;
-    }
-    if (line.startsWith("data:")) {
-      dataLines.push(line.slice(5).trimStart());
-    }
-  }
-
-  if (!dataLines.length) {
-    return null;
-  }
-
-  const rawData = dataLines.join("\n");
-  let parsedData = rawData;
-  try {
-    parsedData = JSON.parse(rawData);
-  } catch {
-    parsedData = rawData;
-  }
-
-  return { event, data: parsedData };
+  sendEvent(res, { type: event, data });
 }
 
 function stageById(stageId) {
@@ -1879,7 +1815,7 @@ function closeRunStream(runId) {
   }
   for (const res of subscribers) {
     try {
-      res.end();
+      closeSse(res);
     } catch {
       // Ignore.
     }
@@ -2767,12 +2703,7 @@ app.get("/api/runs/:runId/stream", (req, res, next) => {
       throw buildRequestError(404, "Run not found.");
     }
 
-    res.writeHead(200, {
-      "Content-Type": "text/event-stream",
-      "Cache-Control": "no-cache",
-      Connection: "keep-alive",
-      "X-Accel-Buffering": "no"
-    });
+    openSse(res);
 
     const isTerminal = run.status === "completed" || run.status === "failed" || run.status === "cancelled";
     if (isTerminal) {
@@ -2785,7 +2716,7 @@ app.get("/api/runs/:runId/stream", (req, res, next) => {
         failedStage: run.failedStage,
         error: run.errorMessage
       });
-      res.end();
+      closeSse(res);
       return;
     }
 
@@ -3010,12 +2941,7 @@ app.post("/api/chat/stream", async (req, res) => {
     });
     payload.stream = true;
 
-    res.writeHead(200, {
-      "Content-Type": "text/event-stream",
-      "Cache-Control": "no-cache",
-      Connection: "keep-alive",
-      "X-Accel-Buffering": "no"
-    });
+    openSse(res);
     headersSent = true;
 
     const upstream = await lmStudioStreamRequest({
@@ -3031,13 +2957,13 @@ app.post("/api/chat/stream", async (req, res) => {
         payloadError?.message ||
         `LM Studio streaming request failed (${upstream.status}).`;
       writeSse(res, "error", { message });
-      res.end();
+      closeSse(res);
       return;
     }
 
     if (!upstream.body) {
       writeSse(res, "error", { message: "No stream body returned by LM Studio." });
-      res.end();
+      closeSse(res);
       return;
     }
 
@@ -3100,7 +3026,7 @@ app.post("/api/chat/stream", async (req, res) => {
       responseId: agent.lastResponseId || null,
       stats: agent.lastStats
     });
-    res.end();
+    closeSse(res);
   } catch (error) {
     if (!headersSent) {
       res.status(Number(error.status) || 500).json({ error: error.message || "Internal server error." });
@@ -3110,7 +3036,7 @@ app.post("/api/chat/stream", async (req, res) => {
     writeSse(res, "error", {
       message: error.message || "Internal server error."
     });
-    res.end();
+    closeSse(res);
   }
 });
 
