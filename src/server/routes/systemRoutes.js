@@ -12,8 +12,37 @@ function registerSystemRoutes(app, deps) {
     getRuns,
     normalizeBaseUrl,
     saveConfig,
-    lmStudioJsonRequest
+    lmStudioJsonRequest,
+    modelCacheTtlMs = 15_000
   } = deps;
+  let modelCache = {
+    expiresAt: 0,
+    models: null
+  };
+
+  function readCachedModels() {
+    if (!Array.isArray(modelCache.models)) {
+      return null;
+    }
+    if (Date.now() > modelCache.expiresAt) {
+      return null;
+    }
+    return modelCache.models;
+  }
+
+  function writeCachedModels(models) {
+    modelCache = {
+      expiresAt: Date.now() + modelCacheTtlMs,
+      models: Array.isArray(models) ? [...models] : []
+    };
+  }
+
+  function resetModelCache() {
+    modelCache = {
+      expiresAt: 0,
+      models: null
+    };
+  }
 
   app.get("/api/health", (req, res) => {
     const config = getConfig();
@@ -37,6 +66,7 @@ function registerSystemRoutes(app, deps) {
       const config = getConfig();
       config.baseUrl = normalizeBaseUrl(body.baseUrl);
       await saveConfig();
+      resetModelCache();
       res.json(config);
     } catch (error) {
       next(error);
@@ -45,16 +75,23 @@ function registerSystemRoutes(app, deps) {
 
   app.get("/api/models", async (req, res, next) => {
     try {
+      const cached = readCachedModels();
+      if (cached) {
+        res.json({ models: cached });
+        return;
+      }
+
       try {
         const payload = await lmStudioJsonRequest({ endpoint: "/models", native: true });
         const models = Array.isArray(payload?.models)
           ? payload.models
               .filter((model) => model && typeof model === "object")
               .filter((model) => model.type === "llm" || !model.type)
-              .map((model) => model.key || model.id)
-              .filter(Boolean)
+            .map((model) => model.key || model.id)
+            .filter(Boolean)
           : [];
         if (models.length || Array.isArray(payload?.models)) {
+          writeCachedModels(models);
           res.json({ models });
           return;
         }
@@ -64,6 +101,7 @@ function registerSystemRoutes(app, deps) {
 
       const payload = await lmStudioJsonRequest({ endpoint: "/models", native: false });
       const models = Array.isArray(payload?.data) ? payload.data.map((item) => item.id).filter(Boolean) : [];
+      writeCachedModels(models);
       res.json({ models });
     } catch (error) {
       next(error);

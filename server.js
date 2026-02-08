@@ -23,6 +23,10 @@ const { createOrchestrator } = require("./src/server/services/orchestrator/orche
 const { registerApiRoutes } = require("./src/server/routes");
 const { createErrorHandler } = require("./src/server/middleware/errorHandler");
 const {
+  createRequestIdMiddleware,
+  createRequestLoggingMiddleware
+} = require("./src/server/middleware/requestContext");
+const {
   ensureConfigFile: ensureConfigFileInStore,
   loadConfig: loadConfigFromStore,
   saveConfig: saveConfigToStore
@@ -52,6 +56,8 @@ const runStreamSubscribers = runtimeState.runStreamSubscribers;
 const activePipelineRuns = runtimeState.activePipelineRuns;
 
 app.use(express.json({ limit: "20mb" }));
+app.use(createRequestIdMiddleware());
+app.use(createRequestLoggingMiddleware({ logger }));
 app.use(express.static(PUBLIC_DIR));
 
 function normalizeBaseUrl(baseUrl) {
@@ -1684,7 +1690,8 @@ registerApiRoutes(app, {
     getRuns: () => runs,
     normalizeBaseUrl,
     saveConfig,
-    lmStudioJsonRequest
+    lmStudioJsonRequest,
+    modelCacheTtlMs: 15_000
   },
   mcp: {
     sanitizeIntegrations,

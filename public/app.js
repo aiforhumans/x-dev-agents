@@ -12,6 +12,7 @@ const DESKTOP_BREAKPOINT = 1080;
 const SMALL_SCREEN_BREAKPOINT = 760;
 const RESIZER_WIDTH = 12;
 const MAX_IMAGE_ATTACHMENT_BYTES = 8 * 1024 * 1024;
+const STORAGE_WRITE_DEBOUNCE_MS = 120;
 const NODE_GROUP_KEYS = ["basics", "model", "sampling", "output", "runtime", "webSearch", "mcp", "diagnostics"];
 const DEFAULT_GROUP_STATE = {
   basics: true,
@@ -102,7 +103,8 @@ const agentGroupStateFeature =
         defaultGroupState: DEFAULT_GROUP_STATE,
         nodeGroupKeys: NODE_GROUP_KEYS,
         getFromLocalStorage,
-        setToLocalStorage
+        setToLocalStorage,
+        scheduleLocalStorageWrite
       })
     : null;
 
@@ -146,6 +148,20 @@ function setToLocalStorage(key, value) {
   } catch {
     // Ignore storage write failures.
   }
+}
+
+const pendingStorageWrites = new Map();
+
+function scheduleLocalStorageWrite(key, value, delayMs = STORAGE_WRITE_DEBOUNCE_MS) {
+  const existing = pendingStorageWrites.get(key);
+  if (existing) {
+    clearTimeout(existing);
+  }
+  const handle = setTimeout(() => {
+    pendingStorageWrites.delete(key);
+    setToLocalStorage(key, value);
+  }, delayMs);
+  pendingStorageWrites.set(key, handle);
 }
 
 function isDesktopLayout() {
@@ -255,7 +271,7 @@ function saveGroupStateForCurrentAgent() {
   }
   const key = getCurrentGroupStorageKey();
   const stateFromUi = getCurrentGroupStateFromUi();
-  setToLocalStorage(key, JSON.stringify(stateFromUi));
+  scheduleLocalStorageWrite(key, JSON.stringify(stateFromUi));
 }
 
 function clampPaneWidthPx(widthPx, containerWidth) {
@@ -315,7 +331,7 @@ function saveLeftPaneWidth() {
   if (!Number.isFinite(state.leftPaneWidthPx)) {
     return;
   }
-  setToLocalStorage(LEFT_PANE_WIDTH_STORAGE_KEY, String(Math.round(state.leftPaneWidthPx)));
+  scheduleLocalStorageWrite(LEFT_PANE_WIDTH_STORAGE_KEY, String(Math.round(state.leftPaneWidthPx)));
 }
 
 function initializeResizableLayout() {

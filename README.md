@@ -162,6 +162,10 @@ npm test
   - `src/server/state/runtimeState.js` for in-process mutable runtime state
   - `src/shared/types/contracts.js` for shared JSDoc contracts and lightweight runtime guards
 - `server.js` remains the bootstrap/route host during incremental extraction.
+- Phase 9 operational improvements:
+  - request context middleware adds/propagates `x-request-id`
+  - structured JSON logs include request metadata and duration
+  - `/api/models` uses short in-memory caching (default TTL: 15s, reset on base URL change)
 
 ## GitHub Notes
 

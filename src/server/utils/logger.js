@@ -1,5 +1,5 @@
 /**
- * Minimal logging helper with optional request-id support.
+ * Structured logging helper with optional request-id support.
  */
 function extractRequestId(context) {
   if (!context) {
@@ -24,26 +24,66 @@ function extractRequestId(context) {
   return null;
 }
 
-function format(message, context) {
+function buildEntry(level, message, context) {
   const requestId = extractRequestId(context);
-  const body = String(message || "");
-  return requestId ? `[requestId:${requestId}] ${body}` : body;
+  const entry = {
+    ts: new Date().toISOString(),
+    level,
+    msg: String(message || "")
+  };
+
+  if (requestId) {
+    entry.requestId = requestId;
+  }
+
+  if (context && typeof context === "object") {
+    if (context.req) {
+      entry.method = context.req.method;
+      entry.path = context.req.originalUrl || context.req.url;
+    }
+    if (context.statusCode !== undefined) {
+      entry.statusCode = context.statusCode;
+    }
+    if (context.durationMs !== undefined) {
+      entry.durationMs = context.durationMs;
+    }
+  }
+
+  return entry;
+}
+
+function write(level, message, context) {
+  const entry = buildEntry(level, message, context);
+  const line = JSON.stringify(entry);
+  if (level === "error") {
+    console.error(line);
+    return;
+  }
+  if (level === "warn") {
+    console.warn(line);
+    return;
+  }
+  if (level === "debug") {
+    console.debug(line);
+    return;
+  }
+  console.log(line);
 }
 
 function info(message, context) {
-  console.log(format(message, context));
+  write("info", message, context);
 }
 
 function debug(message, context) {
-  console.debug(format(message, context));
+  write("debug", message, context);
 }
 
 function warn(message, context) {
-  console.warn(format(message, context));
+  write("warn", message, context);
 }
 
 function error(message, context) {
-  console.error(format(message, context));
+  write("error", message, context);
 }
 
 module.exports = {

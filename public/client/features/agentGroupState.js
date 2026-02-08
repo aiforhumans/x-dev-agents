@@ -8,7 +8,8 @@
       defaultGroupState,
       nodeGroupKeys,
       getFromLocalStorage,
-      setToLocalStorage
+      setToLocalStorage,
+      scheduleLocalStorageWrite
     } = deps;
 
     function getGroupStateStorageKey(agentId) {
@@ -96,7 +97,12 @@
     function saveGroupStateForCurrentAgent() {
       const key = getCurrentGroupStorageKey();
       const stateFromUi = getCurrentGroupStateFromUi();
-      setToLocalStorage(key, JSON.stringify(stateFromUi));
+      const payload = JSON.stringify(stateFromUi);
+      if (typeof scheduleLocalStorageWrite === "function") {
+        scheduleLocalStorageWrite(key, payload);
+        return;
+      }
+      setToLocalStorage(key, payload);
     }
 
     function bindNodeGroupPersistence() {
