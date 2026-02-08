@@ -20,6 +20,8 @@ const { createLmStudioClient, parseJsonResponse } = require("./src/server/servic
 const { parseSseBlock } = require("./src/server/services/lmstudioStreamParser");
 const { openSse, sendEvent, closeSse } = require("./src/server/sse/sseHelpers");
 const { createOrchestrator } = require("./src/server/services/orchestrator/orchestrator");
+const { registerSystemRoutes } = require("./src/server/routes/systemRoutes");
+const { createErrorHandler } = require("./src/server/middleware/errorHandler");
 const {
   ensureConfigFile: ensureConfigFileInStore,
   loadConfig: loadConfigFromStore,
@@ -1668,56 +1670,15 @@ const orchestration = createOrchestrator({
   searchOnline
 });
 
-app.get("/api/health", (req, res) => {
-  res.json({
-    ok: true,
-    baseUrl: config.baseUrl,
-    nativeApiBaseUrl: getNativeApiBaseUrl(),
-    agentCount: agents.length,
-    pipelineCount: pipelines.length,
-    runCount: runs.length
-  });
-});
-
-app.get("/api/config", (req, res) => {
-  res.json(config);
-});
-
-app.put("/api/config", async (req, res, next) => {
-  try {
-    config.baseUrl = normalizeBaseUrl(req.body?.baseUrl);
-    await saveConfig();
-    res.json(config);
-  } catch (error) {
-    next(error);
-  }
-});
-
-app.get("/api/models", async (req, res, next) => {
-  try {
-    try {
-      const payload = await lmStudioJsonRequest({ endpoint: "/models", native: true });
-      const models = Array.isArray(payload?.models)
-        ? payload.models
-            .filter((model) => model && typeof model === "object")
-            .filter((model) => model.type === "llm" || !model.type)
-            .map((model) => model.key || model.id)
-            .filter(Boolean)
-        : [];
-      if (models.length || Array.isArray(payload?.models)) {
-        res.json({ models });
-        return;
-      }
-    } catch {
-      // Fallback to OpenAI-compatible models endpoint.
-    }
-
-    const payload = await lmStudioJsonRequest({ endpoint: "/models", native: false });
-    const models = Array.isArray(payload?.data) ? payload.data.map((item) => item.id).filter(Boolean) : [];
-    res.json({ models });
-  } catch (error) {
-    next(error);
-  }
+registerSystemRoutes(app, {
+  getConfig: () => config,
+  getNativeApiBaseUrl,
+  getAgents: () => agents,
+  getPipelines: () => pipelines,
+  getRuns: () => runs,
+  normalizeBaseUrl,
+  saveConfig,
+  lmStudioJsonRequest
 });
 
 app.get("/api/agents", (req, res) => {
@@ -2369,14 +2330,7 @@ app.get("*", (req, res) => {
   res.sendFile(path.join(PUBLIC_DIR, "index.html"));
 });
 
-app.use((error, req, res, next) => {
-  const status = Number(error.status) || 500;
-  const message = error.message || "Internal server error.";
-  if (status >= 500) {
-    logger.error(error?.stack || message, { req });
-  }
-  res.status(status).json({ error: message });
-});
+app.use(createErrorHandler({ logger }));
 
 async function start() {
   await ensureDataFiles();
