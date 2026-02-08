@@ -1,5 +1,6 @@
 const DEFAULT_SYSTEM_PROMPT = "You are a helpful assistant.";
 const APP_CLIENT = typeof globalThis !== "undefined" ? globalThis.AppClient || {} : {};
+const CREATE_AGENT_GROUP_STATE_FEATURE = APP_CLIENT.features?.createAgentGroupStateFeature;
 const GROUP_STATE_PREFIX = APP_CLIENT.uiKeys?.agentFormGroupStatePrefix || "ui.agentForm.groupState.";
 const LEFT_PANE_WIDTH_STORAGE_KEY = APP_CLIENT.uiKeys?.leftPaneWidthPx || "ui.layout.leftPaneWidthPx";
 const NEW_AGENT_GROUP_KEY = APP_CLIENT.uiKeys?.newAgentGroupStateId || "__new__";
@@ -89,6 +90,20 @@ const elements = {
   nodeGroups: queryAll(".node-group[data-group]")
 };
 
+const agentGroupStateFeature =
+  typeof CREATE_AGENT_GROUP_STATE_FEATURE === "function"
+    ? CREATE_AGENT_GROUP_STATE_FEATURE({
+        state,
+        elements,
+        groupStatePrefix: GROUP_STATE_PREFIX,
+        newAgentGroupKey: NEW_AGENT_GROUP_KEY,
+        defaultGroupState: DEFAULT_GROUP_STATE,
+        nodeGroupKeys: NODE_GROUP_KEYS,
+        getFromLocalStorage,
+        setToLocalStorage
+      })
+    : null;
+
 function setStatus(message, isError = false) {
   elements.statusBar.textContent = message;
   elements.statusBar.classList.toggle("error", isError);
@@ -128,6 +143,9 @@ function isDesktopLayout() {
 }
 
 function getGroupStateStorageKey(agentId) {
+  if (agentGroupStateFeature && typeof agentGroupStateFeature.getGroupStateStorageKey === "function") {
+    return agentGroupStateFeature.getGroupStateStorageKey(agentId);
+  }
   const normalizedAgentId = String(agentId || "").trim();
   return `${GROUP_STATE_PREFIX}${normalizedAgentId || NEW_AGENT_GROUP_KEY}`;
 }
@@ -137,6 +155,9 @@ function getCurrentGroupStorageKey() {
 }
 
 function sanitizeGroupState(rawState) {
+  if (agentGroupStateFeature && typeof agentGroupStateFeature.sanitizeGroupState === "function") {
+    return agentGroupStateFeature.sanitizeGroupState(rawState);
+  }
   const sanitized = { ...DEFAULT_GROUP_STATE };
   if (!rawState || typeof rawState !== "object") {
     return sanitized;
@@ -207,10 +228,18 @@ function applyGroupStateToUi(groupState) {
 }
 
 function loadGroupStateForCurrentAgent() {
+  if (agentGroupStateFeature && typeof agentGroupStateFeature.loadGroupStateForCurrentAgent === "function") {
+    agentGroupStateFeature.loadGroupStateForCurrentAgent();
+    return;
+  }
   applyGroupStateToUi(readStoredGroupState(getCurrentGroupStorageKey()));
 }
 
 function saveGroupStateForCurrentAgent() {
+  if (agentGroupStateFeature && typeof agentGroupStateFeature.saveGroupStateForCurrentAgent === "function") {
+    agentGroupStateFeature.saveGroupStateForCurrentAgent();
+    return;
+  }
   const key = getCurrentGroupStorageKey();
   const stateFromUi = getCurrentGroupStateFromUi();
   setToLocalStorage(key, JSON.stringify(stateFromUi));
@@ -381,6 +410,10 @@ function initializeResizableLayout() {
 }
 
 function bindNodeGroupPersistence() {
+  if (agentGroupStateFeature && typeof agentGroupStateFeature.bindNodeGroupPersistence === "function") {
+    agentGroupStateFeature.bindNodeGroupPersistence();
+    return;
+  }
   for (const group of elements.nodeGroups) {
     if (!group || typeof group.addEventListener !== "function") {
       continue;
