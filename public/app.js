@@ -33,6 +33,12 @@ const state = {
   agentGroups: [],
   selectedAgentId: null,
   selectedAgentGroupId: null,
+  selectedGroupRunId: null,
+  selectedGroupRunStatus: "idle",
+  selectedGroupRunStageState: null,
+  selectedGroupRunEvents: [],
+  selectedGroupRunStreamAbortController: null,
+  selectedGroupRunStreamToken: 0,
   chatHistory: [],
   isStreaming: false,
   leftPaneWidthPx: null,
@@ -69,6 +75,7 @@ const elements = {
   groupRoleStyle: document.getElementById("groupRoleStyle"),
   groupRoleAudit: document.getElementById("groupRoleAudit"),
   groupRunTopic: document.getElementById("groupRunTopic"),
+  agentGroupRunStatus: document.getElementById("agentGroupRunStatus"),
   newAgentGroupBtn: document.getElementById("newAgentGroupBtn"),
   saveAgentGroupBtn: document.getElementById("saveAgentGroupBtn"),
   runAgentGroupBtn: document.getElementById("runAgentGroupBtn"),
@@ -614,6 +621,7 @@ function resetAgentGroupForm() {
     elements.deleteAgentGroupBtn.disabled = true;
   }
   renderAgentGroupList();
+  renderGroupRunStatus();
 }
 
 function fillAgentGroupForm(group) {
@@ -640,6 +648,7 @@ function fillAgentGroupForm(group) {
     elements.deleteAgentGroupBtn.disabled = false;
   }
   renderAgentGroupList();
+  renderGroupRunStatus();
 }
 
 function collectAgentGroupForm() {
@@ -670,6 +679,186 @@ function collectAgentGroupForm() {
     payload.groupId = groupId;
   }
   return payload;
+}
+
+function pushGroupRunEventLine(line) {
+  const text = String(line || "").trim();
+  if (!text) {
+    return;
+  }
+  state.selectedGroupRunEvents.push(text);
+  if (state.selectedGroupRunEvents.length > 40) {
+    state.selectedGroupRunEvents = state.selectedGroupRunEvents.slice(-40);
+  }
+}
+
+function summarizeStageState(stageState) {
+  if (!stageState || typeof stageState !== "object") {
+    return "";
+  }
+  const ordered = GROUP_ROLE_KEYS
+    .map((stageId) => stageState[stageId])
+    .filter((entry) => entry && typeof entry === "object");
+  if (!ordered.length) {
+    return "";
+  }
+  return ordered
+    .map((entry) => {
+      const stageId = String(entry.stageId || "").trim() || "stage";
+      const status = String(entry.status || "pending").trim();
+      return `${stageId}: ${status}`;
+    })
+    .join("\n");
+}
+
+function renderGroupRunStatus() {
+  if (!elements.agentGroupRunStatus) {
+    return;
+  }
+  if (!state.selectedGroupRunId) {
+    elements.agentGroupRunStatus.textContent = "No group run started.";
+    return;
+  }
+
+  const lines = [
+    `runId: ${state.selectedGroupRunId}`,
+    `status: ${state.selectedGroupRunStatus || "unknown"}`
+  ];
+
+  const stageSummary = summarizeStageState(state.selectedGroupRunStageState);
+  if (stageSummary) {
+    lines.push("");
+    lines.push(stageSummary);
+  }
+
+  if (state.selectedGroupRunEvents.length) {
+    lines.push("");
+    lines.push("events:");
+    lines.push(...state.selectedGroupRunEvents.slice(-8));
+  }
+
+  elements.agentGroupRunStatus.textContent = lines.join("\n");
+}
+
+function applyGroupRunSnapshot(run) {
+  if (!run || typeof run !== "object") {
+    return;
+  }
+  state.selectedGroupRunStatus = String(run.status || state.selectedGroupRunStatus || "unknown");
+  if (run.stageState && typeof run.stageState === "object") {
+    state.selectedGroupRunStageState = run.stageState;
+  }
+  renderGroupRunStatus();
+}
+
+function clearGroupRunStreamTracking() {
+  if (state.selectedGroupRunStreamAbortController) {
+    try {
+      state.selectedGroupRunStreamAbortController.abort();
+    } catch {
+      // Ignore abort errors.
+    }
+  }
+  state.selectedGroupRunStreamAbortController = null;
+}
+
+async function trackGroupRun(runId) {
+  const normalizedRunId = String(runId || "").trim();
+  if (!normalizedRunId) {
+    return;
+  }
+
+  clearGroupRunStreamTracking();
+
+  state.selectedGroupRunStreamToken += 1;
+  const token = state.selectedGroupRunStreamToken;
+  const abortController = typeof AbortController !== "undefined" ? new AbortController() : null;
+  state.selectedGroupRunStreamAbortController = abortController;
+  state.selectedGroupRunId = normalizedRunId;
+  state.selectedGroupRunStatus = "queued";
+  state.selectedGroupRunStageState = null;
+  state.selectedGroupRunEvents = [];
+  pushGroupRunEventLine("tracking started");
+  renderGroupRunStatus();
+
+  try {
+    const snapshot = await api(`/api/runs/${normalizedRunId}`);
+    if (token !== state.selectedGroupRunStreamToken) {
+      return;
+    }
+    applyGroupRunSnapshot(snapshot);
+  } catch (error) {
+    if (token !== state.selectedGroupRunStreamToken) {
+      return;
+    }
+    pushGroupRunEventLine(`snapshot error: ${error.message}`);
+    renderGroupRunStatus();
+  }
+
+  try {
+    const response = await fetch(`/api/runs/${encodeURIComponent(normalizedRunId)}/stream`, {
+      signal: abortController ? abortController.signal : undefined
+    });
+    if (token !== state.selectedGroupRunStreamToken) {
+      return;
+    }
+    if (!response.ok) {
+      let message = `Run stream request failed (${response.status}).`;
+      try {
+        const payload = await response.json();
+        message = payload?.error || message;
+      } catch {
+        // Ignore.
+      }
+      throw new Error(message);
+    }
+    if (!response.body) {
+      throw new Error("Run stream response body unavailable.");
+    }
+
+    for await (const event of streamSse(response.body)) {
+      if (token !== state.selectedGroupRunStreamToken) {
+        return;
+      }
+      const eventName = String(event.event || "message");
+      const data = event.data && typeof event.data === "object" ? event.data : {};
+      if (data.status) {
+        state.selectedGroupRunStatus = String(data.status);
+      }
+      if (data.stageState && typeof data.stageState === "object") {
+        state.selectedGroupRunStageState = data.stageState;
+      }
+
+      if (eventName === "stage_started") {
+        pushGroupRunEventLine(`stage_started: ${String(data.stageId || "unknown")}`);
+      } else if (eventName === "stage_completed") {
+        pushGroupRunEventLine(`stage_completed: ${String(data.stageId || "unknown")}`);
+      } else if (eventName === "artifact_written") {
+        pushGroupRunEventLine(`artifact_written: ${String(data.artifact?.title || "artifact")}`);
+      } else if (eventName === "run_failed") {
+        state.selectedGroupRunStatus = "failed";
+        pushGroupRunEventLine(`run_failed: ${String(data.error || "unknown error")}`);
+      } else if (eventName === "run_completed") {
+        state.selectedGroupRunStatus = "completed";
+        pushGroupRunEventLine("run_completed");
+      }
+
+      renderGroupRunStatus();
+    }
+  } catch (error) {
+    if (token !== state.selectedGroupRunStreamToken) {
+      return;
+    }
+    if (error?.name === "AbortError") {
+      return;
+    }
+    pushGroupRunEventLine(`stream error: ${error.message}`);
+    renderGroupRunStatus();
+  } finally {
+    if (token === state.selectedGroupRunStreamToken) {
+      state.selectedGroupRunStreamAbortController = null;
+    }
+  }
 }
 
 function renderModelOptions(selectedModel = "") {
@@ -1696,6 +1885,7 @@ async function initialize() {
   bindEvents();
   updateAttachmentCount();
   renderAttachmentPreview();
+  renderGroupRunStatus();
   setScrollButtonVisible(false);
   autoResizeChatMessage();
 
@@ -1957,6 +2147,7 @@ function bindEvents() {
           method: "POST",
           body: JSON.stringify({ topic })
         });
+        await trackGroupRun(payload.runId);
         setStatus(`Group run started: ${payload.runId}`);
       } catch (error) {
         setStatus(error.message, true);

@@ -351,6 +351,20 @@ button.danger {
   flex-direction: column;
 }
 
+.group-run-status pre {
+  margin: 0;
+  padding: 0.5rem 0.62rem;
+  border: 1px solid #343434;
+  border-radius: 10px;
+  background: #202020;
+  color: #cbcbcb;
+  font-size: 0.74rem;
+  line-height: 1.35;
+  white-space: pre-wrap;
+  max-height: 180px;
+  overflow: auto;
+}
+
 .team-group {
   margin-bottom: 0.7rem;
 }

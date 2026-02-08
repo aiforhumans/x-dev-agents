@@ -44,6 +44,7 @@ Local web app for creating and testing custom agents backed by the LM Studio API
   - reusable named teams mapped to canonical roles (`discovery`, `synthesis`, `draft`, `adapt`, `style`, `audit`)
   - sequential execution settings and default run options
   - minimal UI panel for group CRUD and one-click group run kickoff
+  - live **Group Run Status** panel with stage/status/event updates from `/api/runs/:runId/stream`
 - Render assistant output types from LM Studio:
   - `message`
   - `reasoning` (collapsible)
@@ -140,6 +141,17 @@ Open `http://localhost:3000`.
 - `run_completed`
 - `run_failed`
 - `heartbeat`
+
+### Group Run UI Notes
+
+- Starting a group run (`POST /api/agent-groups/:id/run`) now auto-subscribes the UI to:
+  - `GET /api/runs/:runId`
+  - `GET /api/runs/:runId/stream`
+- The Multi-Agent Groups panel shows:
+  - active `runId`
+  - current run `status`
+  - per-stage status summary
+  - recent orchestration events (stage transitions, artifact writes, terminal state)
 
 ### Canonical Orchestration Stages
 
