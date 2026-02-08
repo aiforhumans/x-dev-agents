@@ -1,3 +1,5 @@
+const { isRunEventType } = require("../../../shared/types/contracts");
+
 const RUN_EVENT_TYPES = Object.freeze([
   "run_started",
   "stage_started",
@@ -11,5 +13,6 @@ const RUN_EVENT_TYPES = Object.freeze([
 ]);
 
 module.exports = {
-  RUN_EVENT_TYPES
+  RUN_EVENT_TYPES,
+  isRunEventType
 };

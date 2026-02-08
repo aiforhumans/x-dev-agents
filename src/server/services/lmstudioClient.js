@@ -1,6 +1,8 @@
 /**
  * LM Studio HTTP client helpers.
  */
+const { coerceLmStudioChatResponse } = require("../../shared/types/contracts");
+
 async function parseJsonResponse(response) {
   const text = await response.text();
   if (!text) {
@@ -19,6 +21,9 @@ function createLmStudioClient({
   buildRequestError,
   fetchImpl = fetch
 }) {
+  /**
+   * @param {{ endpoint: string, method?: string, body?: any, native?: boolean }} params
+   */
   async function jsonRequest({ endpoint, method = "GET", body = null, native = true }) {
     const baseUrl = native ? getNativeApiBaseUrl() : getOpenAIBaseUrl();
     const response = await fetchImpl(`${baseUrl}${endpoint}`, {
@@ -39,9 +44,16 @@ function createLmStudioClient({
       throw buildRequestError(response.status, String(message));
     }
 
+    if (endpoint === "/chat" && String(method).toUpperCase() === "POST") {
+      return coerceLmStudioChatResponse(payload);
+    }
+
     return payload;
   }
 
+  /**
+   * @param {{ endpoint: string, body: any }} params
+   */
   async function streamRequest({ endpoint, body }) {
     const baseUrl = getNativeApiBaseUrl();
     return fetchImpl(`${baseUrl}${endpoint}`, {
