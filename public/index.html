@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>LM Studio Agent Builder</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;600&family=JetBrains+Mono:wght@400;500;700&family=Oxanium:wght@400;600;700&display=swap"
+      rel="stylesheet"
+    />
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <div class="page">
+      <header class="header panel hero">
+        <div class="hero-copy">
+          <p class="eyebrow">LM STUDIO CONTROL SURFACE</p>
+          <div class="hero-title-row">
+            <h1>Agent Builder</h1>
+            <span class="live-pill">LOCAL</span>
+          </div>
+          <p>Create, tune, and run local agents with streaming multimodal chat.</p>
+        </div>
+        <div class="connection connection-panel">
+          <label for="baseUrlInput">LM Studio Base URL</label>
+          <div class="row">
+            <input id="baseUrlInput" type="text" placeholder="http://localhost:1234/v1" />
+            <button id="saveBaseUrlBtn" type="button">Save URL</button>
+            <button id="testConnectionBtn" type="button">Test</button>
+          </div>
+        </div>
+      </header>
+
+      <main class="layout">
+        <section class="panel agents-panel">
+          <div class="panel-title-row">
+            <h2>Agents</h2>
+            <button id="newAgentBtn" type="button">New Agent</button>
+          </div>
+          <ul id="agentList" class="agent-list"></ul>
+
+          <form id="agentForm" class="form">
+            <input id="agentId" type="hidden" />
+
+            <div class="form-section">
+              <h3>Identity</h3>
+              <label for="agentName">Name</label>
+              <input id="agentName" type="text" required />
+
+              <label for="agentDescription">Description</label>
+              <input id="agentDescription" type="text" />
+            </div>
+
+            <div class="form-section">
+              <h3>Core Model</h3>
+              <label for="agentModel">Model</label>
+              <div class="row">
+                <select id="agentModel" required></select>
+                <button id="refreshModelsBtn" type="button">Refresh</button>
+              </div>
+
+              <label for="agentTemperature">Temperature</label>
+              <input id="agentTemperature" type="number" min="0" max="1" step="0.1" />
+            </div>
+
+            <details class="advanced-settings">
+              <summary>Advanced Generation Controls</summary>
+
+              <div class="row">
+                <div>
+                  <label for="agentTopP">Top P</label>
+                  <input id="agentTopP" type="number" min="0" max="1" step="0.01" placeholder="default" />
+                </div>
+                <div>
+                  <label for="agentTopK">Top K</label>
+                  <input id="agentTopK" type="number" min="1" step="1" placeholder="default" />
+                </div>
+              </div>
+
+              <div class="row">
+                <div>
+                  <label for="agentMinP">Min P</label>
+                  <input id="agentMinP" type="number" min="0" max="1" step="0.01" placeholder="default" />
+                </div>
+                <div>
+                  <label for="agentRepeatPenalty">Repeat Penalty</label>
+                  <input id="agentRepeatPenalty" type="number" min="1" step="0.01" placeholder="default" />
+                </div>
+              </div>
+
+              <div class="row">
+                <div>
+                  <label for="agentMaxOutputTokens">Max Output Tokens</label>
+                  <input id="agentMaxOutputTokens" type="number" min="1" step="1" placeholder="default" />
+                </div>
+                <div>
+                  <label for="agentContextLength">Context Length</label>
+                  <input id="agentContextLength" type="number" min="1" step="1" placeholder="default" />
+                </div>
+              </div>
+
+              <label for="agentReasoning">Reasoning</label>
+              <select id="agentReasoning">
+                <option value="">Default</option>
+                <option value="off">off</option>
+                <option value="low">low</option>
+                <option value="medium">medium</option>
+                <option value="high">high</option>
+              </select>
+            </details>
+
+            <div class="form-section">
+              <h3>Prompt + Tools</h3>
+              <label for="agentSystemPrompt">System Prompt</label>
+              <textarea id="agentSystemPrompt" rows="7"></textarea>
+
+              <label for="agentIntegrations">Integrations (JSON array or one plugin id per line)</label>
+              <textarea id="agentIntegrations" rows="5" placeholder='["mcp/your_server"]'></textarea>
+            </div>
+
+            <div class="toggle-row">
+              <label class="checkbox-field" for="agentStore">
+                <input id="agentStore" type="checkbox" />
+                <span>Persist LM Studio response chain (`store` + `previous_response_id`)</span>
+              </label>
+              <label class="checkbox-field" for="agentStream">
+                <input id="agentStream" type="checkbox" />
+                <span>Stream responses</span>
+              </label>
+            </div>
+
+            <div class="row">
+              <button id="saveAgentBtn" type="submit">Save Agent</button>
+              <button id="deleteAgentBtn" class="danger" type="button">Delete</button>
+            </div>
+          </form>
+        </section>
+
+        <section class="panel chat-panel">
+          <div class="chat-panel-head">
+            <h2 id="chatTitle">Agent Chat</h2>
+            <p>Live response stream with persisted history and stats.</p>
+          </div>
+
+          <div class="chat-shell">
+            <div id="chatLog" class="chat-log"></div>
+            <form id="chatForm" class="chat-form">
+              <label for="chatMessage">Message</label>
+              <textarea id="chatMessage" rows="4" placeholder="Ask your selected agent something..."></textarea>
+              <label for="chatImages">Attach Images</label>
+              <input id="chatImages" type="file" accept="image/*" multiple />
+              <div class="row">
+                <button id="sendMessageBtn" type="submit">Send</button>
+                <button id="resetChatBtn" type="button">Reset Conversation</button>
+              </div>
+            </form>
+          </div>
+        </section>
+      </main>
+
+      <footer id="statusBar" class="status">Ready.</footer>
+    </div>
+    <script src="/app.js"></script>
+  </body>
+</html>

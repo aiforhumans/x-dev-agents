@@ -1,0 +1,15 @@
+{
+  "name": "lmstudio-agent-builder",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Local agent builder that uses the LM Studio API",
+  "type": "commonjs",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js",
+    "test": "node --test"
+  },
+  "dependencies": {
+    "express": "^4.21.2"
+  }
+}
