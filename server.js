@@ -2,15 +2,8 @@ const express = require("express");
 const fs = require("node:fs/promises");
 const path = require("node:path");
 const { randomUUID } = require("node:crypto");
-const {
-  PORT,
-  DATA_DIR,
-  AGENTS_FILE,
-  CONFIG_FILE,
-  PIPELINES_FILE,
-  RUNS_FILE,
-  DEFAULT_BASE_URL
-} = require("./src/server/config/env");
+const { PORT, DEFAULT_BASE_URL } = require("./src/server/config/env");
+const { DATA_DIR, PUBLIC_DIR, AGENTS_FILE, CONFIG_FILE, PIPELINES_FILE, RUNS_FILE } = require("./src/server/config/paths");
 const {
   DEFAULT_SYSTEM_PROMPT,
   HISTORY_LIMIT,
@@ -22,6 +15,7 @@ const {
   RUN_STATUS_VALUES,
   RUN_STREAM_HEARTBEAT_MS
 } = require("./src/server/config/constants");
+const logger = require("./src/server/utils/logger");
 const runtimeState = require("./src/server/state/runtimeState");
 const {
   ensureConfigFile: ensureConfigFileInStore,
@@ -38,7 +32,7 @@ const runStreamSubscribers = runtimeState.runStreamSubscribers;
 const activePipelineRuns = runtimeState.activePipelineRuns;
 
 app.use(express.json({ limit: "20mb" }));
-app.use(express.static(path.join(process.cwd(), "public")));
+app.use(express.static(PUBLIC_DIR));
 
 function normalizeBaseUrl(baseUrl) {
   const trimmed = String(baseUrl || "").trim().replace(/\/+$/, "");
@@ -1531,7 +1525,7 @@ async function enrichMessageWithSearch(agent, messageParts) {
 
     return [{ type: "message", content: searchContext }, ...messageParts];
   } catch (error) {
-    console.warn("Online search unavailable, continuing without search context:", error.message || error);
+    logger.warn(`Online search unavailable, continuing without search context: ${error.message || error}`);
     return messageParts;
   }
 }
@@ -3141,14 +3135,14 @@ app.post("/api/chat/stream", async (req, res) => {
 });
 
 app.get("*", (req, res) => {
-  res.sendFile(path.join(process.cwd(), "public", "index.html"));
+  res.sendFile(path.join(PUBLIC_DIR, "index.html"));
 });
 
 app.use((error, req, res, next) => {
   const status = Number(error.status) || 500;
   const message = error.message || "Internal server error.";
   if (status >= 500) {
-    console.error(error);
+    logger.error(error?.stack || message, { req });
   }
   res.status(status).json({ error: message });
 });
@@ -3161,7 +3155,7 @@ async function start() {
   await loadRuns();
 
   app.listen(PORT, () => {
-    console.log(`LM Studio Agent Builder running at http://localhost:${PORT}`);
+    logger.info(`LM Studio Agent Builder running at http://localhost:${PORT}`);
   });
 }
 
@@ -3199,7 +3193,7 @@ module.exports = {
 
 if (require.main === module) {
   start().catch((error) => {
-    console.error("Failed to start server:", error);
+    logger.error(`Failed to start server: ${error?.stack || error?.message || error}`);
     process.exit(1);
   });
 }
