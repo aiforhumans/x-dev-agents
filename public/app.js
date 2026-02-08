@@ -1,13 +1,18 @@
 const DEFAULT_SYSTEM_PROMPT = "You are a helpful assistant.";
-const GROUP_STATE_PREFIX = "ui.agentForm.groupState.";
-const LEFT_PANE_WIDTH_STORAGE_KEY = "ui.layout.leftPaneWidthPx";
-const NEW_AGENT_GROUP_KEY = "__new__";
+const APP_CLIENT = typeof globalThis !== "undefined" ? globalThis.AppClient || {} : {};
+const CREATE_AGENT_GROUP_STATE_FEATURE = APP_CLIENT.features?.createAgentGroupStateFeature;
+const CREATE_CHAT_UI_FEATURE = APP_CLIENT.features?.createChatUiFeature;
+const STREAM_SSE_FEATURE = APP_CLIENT.features?.streamSse;
+const GROUP_STATE_PREFIX = APP_CLIENT.uiKeys?.agentFormGroupStatePrefix || "ui.agentForm.groupState.";
+const LEFT_PANE_WIDTH_STORAGE_KEY = APP_CLIENT.uiKeys?.leftPaneWidthPx || "ui.layout.leftPaneWidthPx";
+const NEW_AGENT_GROUP_KEY = APP_CLIENT.uiKeys?.newAgentGroupStateId || "__new__";
 const MIN_LEFT_PANE_WIDTH = 360;
 const MIN_RIGHT_PANE_WIDTH = 560;
 const DESKTOP_BREAKPOINT = 1080;
 const SMALL_SCREEN_BREAKPOINT = 760;
 const RESIZER_WIDTH = 12;
 const MAX_IMAGE_ATTACHMENT_BYTES = 8 * 1024 * 1024;
+const STORAGE_WRITE_DEBOUNCE_MS = 120;
 const NODE_GROUP_KEYS = ["basics", "model", "sampling", "output", "runtime", "webSearch", "mcp", "diagnostics"];
 const DEFAULT_GROUP_STATE = {
   basics: true,
@@ -88,6 +93,32 @@ const elements = {
   nodeGroups: queryAll(".node-group[data-group]")
 };
 
+const agentGroupStateFeature =
+  typeof CREATE_AGENT_GROUP_STATE_FEATURE === "function"
+    ? CREATE_AGENT_GROUP_STATE_FEATURE({
+        state,
+        elements,
+        groupStatePrefix: GROUP_STATE_PREFIX,
+        newAgentGroupKey: NEW_AGENT_GROUP_KEY,
+        defaultGroupState: DEFAULT_GROUP_STATE,
+        nodeGroupKeys: NODE_GROUP_KEYS,
+        getFromLocalStorage,
+        setToLocalStorage,
+        scheduleLocalStorageWrite
+      })
+    : null;
+
+const chatUiFeature =
+  typeof CREATE_CHAT_UI_FEATURE === "function"
+    ? CREATE_CHAT_UI_FEATURE({
+        state,
+        elements,
+        setStatus,
+        escapeHtml,
+        maxImageAttachmentBytes: MAX_IMAGE_ATTACHMENT_BYTES
+      })
+    : null;
+
 function setStatus(message, isError = false) {
   elements.statusBar.textContent = message;
   elements.statusBar.classList.toggle("error", isError);
@@ -119,6 +150,20 @@ function setToLocalStorage(key, value) {
   }
 }
 
+const pendingStorageWrites = new Map();
+
+function scheduleLocalStorageWrite(key, value, delayMs = STORAGE_WRITE_DEBOUNCE_MS) {
+  const existing = pendingStorageWrites.get(key);
+  if (existing) {
+    clearTimeout(existing);
+  }
+  const handle = setTimeout(() => {
+    pendingStorageWrites.delete(key);
+    setToLocalStorage(key, value);
+  }, delayMs);
+  pendingStorageWrites.set(key, handle);
+}
+
 function isDesktopLayout() {
   if (typeof window === "undefined" || typeof window.innerWidth !== "number") {
     return true;
@@ -127,6 +172,9 @@ function isDesktopLayout() {
 }
 
 function getGroupStateStorageKey(agentId) {
+  if (agentGroupStateFeature && typeof agentGroupStateFeature.getGroupStateStorageKey === "function") {
+    return agentGroupStateFeature.getGroupStateStorageKey(agentId);
+  }
   const normalizedAgentId = String(agentId || "").trim();
   return `${GROUP_STATE_PREFIX}${normalizedAgentId || NEW_AGENT_GROUP_KEY}`;
 }
@@ -136,6 +184,9 @@ function getCurrentGroupStorageKey() {
 }
 
 function sanitizeGroupState(rawState) {
+  if (agentGroupStateFeature && typeof agentGroupStateFeature.sanitizeGroupState === "function") {
+    return agentGroupStateFeature.sanitizeGroupState(rawState);
+  }
   const sanitized = { ...DEFAULT_GROUP_STATE };
   if (!rawState || typeof rawState !== "object") {
     return sanitized;
@@ -206,13 +257,21 @@ function applyGroupStateToUi(groupState) {
 }
 
 function loadGroupStateForCurrentAgent() {
+  if (agentGroupStateFeature && typeof agentGroupStateFeature.loadGroupStateForCurrentAgent === "function") {
+    agentGroupStateFeature.loadGroupStateForCurrentAgent();
+    return;
+  }
   applyGroupStateToUi(readStoredGroupState(getCurrentGroupStorageKey()));
 }
 
 function saveGroupStateForCurrentAgent() {
+  if (agentGroupStateFeature && typeof agentGroupStateFeature.saveGroupStateForCurrentAgent === "function") {
+    agentGroupStateFeature.saveGroupStateForCurrentAgent();
+    return;
+  }
   const key = getCurrentGroupStorageKey();
   const stateFromUi = getCurrentGroupStateFromUi();
-  setToLocalStorage(key, JSON.stringify(stateFromUi));
+  scheduleLocalStorageWrite(key, JSON.stringify(stateFromUi));
 }
 
 function clampPaneWidthPx(widthPx, containerWidth) {
@@ -272,7 +331,7 @@ function saveLeftPaneWidth() {
   if (!Number.isFinite(state.leftPaneWidthPx)) {
     return;
   }
-  setToLocalStorage(LEFT_PANE_WIDTH_STORAGE_KEY, String(Math.round(state.leftPaneWidthPx)));
+  scheduleLocalStorageWrite(LEFT_PANE_WIDTH_STORAGE_KEY, String(Math.round(state.leftPaneWidthPx)));
 }
 
 function initializeResizableLayout() {
@@ -380,6 +439,10 @@ function initializeResizableLayout() {
 }
 
 function bindNodeGroupPersistence() {
+  if (agentGroupStateFeature && typeof agentGroupStateFeature.bindNodeGroupPersistence === "function") {
+    agentGroupStateFeature.bindNodeGroupPersistence();
+    return;
+  }
   for (const group of elements.nodeGroups) {
     if (!group || typeof group.addEventListener !== "function") {
       continue;
@@ -391,6 +454,10 @@ function bindNodeGroupPersistence() {
 }
 
 async function api(path, options = {}) {
+  if (APP_CLIENT.api && typeof APP_CLIENT.api.request === "function") {
+    return APP_CLIENT.api.request(path, options);
+  }
+
   const response = await fetch(path, {
     headers: {
       "Content-Type": "application/json",
@@ -663,6 +730,9 @@ function renderMessage(item) {
 }
 
 function isNearBottom(element, threshold = 72) {
+  if (chatUiFeature && typeof chatUiFeature.isNearBottom === "function") {
+    return chatUiFeature.isNearBottom(element, threshold);
+  }
   if (!element) {
     return true;
   }
@@ -674,6 +744,10 @@ function isNearBottom(element, threshold = 72) {
 }
 
 function setScrollButtonVisible(visible) {
+  if (chatUiFeature && typeof chatUiFeature.setScrollButtonVisible === "function") {
+    chatUiFeature.setScrollButtonVisible(visible);
+    return;
+  }
   if (!elements.scrollToBottomBtn) {
     return;
   }
@@ -681,6 +755,10 @@ function setScrollButtonVisible(visible) {
 }
 
 function scrollChatToBottom({ smooth = false } = {}) {
+  if (chatUiFeature && typeof chatUiFeature.scrollChatToBottom === "function") {
+    chatUiFeature.scrollChatToBottom({ smooth });
+    return;
+  }
   if (!elements.chatLog) {
     return;
   }
@@ -694,6 +772,10 @@ function scrollChatToBottom({ smooth = false } = {}) {
 }
 
 function syncChatScrollState() {
+  if (chatUiFeature && typeof chatUiFeature.syncChatScrollState === "function") {
+    chatUiFeature.syncChatScrollState();
+    return;
+  }
   if (!elements.chatLog) {
     return;
   }
@@ -733,6 +815,10 @@ function renderChat(history = [], { showTyping = false, streamPreview = "", forc
 }
 
 function updateAttachmentCount() {
+  if (chatUiFeature && typeof chatUiFeature.updateAttachmentCount === "function") {
+    chatUiFeature.updateAttachmentCount();
+    return;
+  }
   if (!elements.chatAttachmentCount) {
     return;
   }
@@ -745,6 +831,9 @@ function updateAttachmentCount() {
 }
 
 function formatBytes(bytes) {
+  if (chatUiFeature && typeof chatUiFeature.formatBytes === "function") {
+    return chatUiFeature.formatBytes(bytes);
+  }
   const size = Number(bytes);
   if (!Number.isFinite(size) || size <= 0) {
     return "0 B";
@@ -759,6 +848,10 @@ function formatBytes(bytes) {
 }
 
 function revokeAttachmentPreviewUrls() {
+  if (chatUiFeature && typeof chatUiFeature.revokeAttachmentPreviewUrls === "function") {
+    chatUiFeature.revokeAttachmentPreviewUrls();
+    return;
+  }
   if (typeof URL === "undefined" || typeof URL.revokeObjectURL !== "function") {
     state.attachmentPreviewUrls = [];
     return;
@@ -770,6 +863,10 @@ function revokeAttachmentPreviewUrls() {
 }
 
 function syncPendingImagesToInput() {
+  if (chatUiFeature && typeof chatUiFeature.syncPendingImagesToInput === "function") {
+    chatUiFeature.syncPendingImagesToInput();
+    return;
+  }
   if (!elements.chatImages || typeof DataTransfer !== "function") {
     return;
   }
@@ -786,6 +883,10 @@ function syncPendingImagesToInput() {
 }
 
 function renderAttachmentPreview() {
+  if (chatUiFeature && typeof chatUiFeature.renderAttachmentPreview === "function") {
+    chatUiFeature.renderAttachmentPreview();
+    return;
+  }
   if (!elements.chatAttachmentPreview) {
     return;
   }
@@ -824,6 +925,10 @@ function renderAttachmentPreview() {
 }
 
 function mergePendingImages(files) {
+  if (chatUiFeature && typeof chatUiFeature.mergePendingImages === "function") {
+    chatUiFeature.mergePendingImages(files);
+    return;
+  }
   const unique = new Map(
     state.pendingImages.map((file) => [`${file.name}:${file.size}:${file.lastModified}:${file.type}`, file])
   );
@@ -862,6 +967,10 @@ function mergePendingImages(files) {
 }
 
 function removePendingImage(index) {
+  if (chatUiFeature && typeof chatUiFeature.removePendingImage === "function") {
+    chatUiFeature.removePendingImage(index);
+    return;
+  }
   if (!Number.isInteger(index) || index < 0 || index >= state.pendingImages.length) {
     return;
   }
@@ -872,6 +981,10 @@ function removePendingImage(index) {
 }
 
 function clearPendingImages() {
+  if (chatUiFeature && typeof chatUiFeature.clearPendingImages === "function") {
+    chatUiFeature.clearPendingImages();
+    return;
+  }
   state.pendingImages = [];
   if (elements.chatImages) {
     elements.chatImages.value = "";
@@ -882,6 +995,10 @@ function clearPendingImages() {
 }
 
 function autoResizeChatMessage() {
+  if (chatUiFeature && typeof chatUiFeature.autoResizeChatMessage === "function") {
+    chatUiFeature.autoResizeChatMessage();
+    return;
+  }
   if (!elements.chatMessage || !elements.chatMessage.style) {
     return;
   }
@@ -1212,6 +1329,10 @@ async function buildMessageParts(text, files) {
 }
 
 async function* streamSse(body) {
+  if (typeof STREAM_SSE_FEATURE === "function") {
+    yield* STREAM_SSE_FEATURE(body);
+    return;
+  }
   const reader = body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";

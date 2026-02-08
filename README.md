@@ -1,6 +1,11 @@
+![LM Studio Agent Builder](image.png)
+
 # LM Studio Agent Builder
 
 Local web app for creating and testing custom agents backed by the LM Studio API.
+
+> **Refactor Banner**  
+> Branch: `refactor/modular-server-client` | Status: `Phase 0-9 complete` | Runtime behavior preserved through refactor phases
 
 ## Features
 
@@ -151,6 +156,35 @@ Open `http://localhost:3000`.
 npm test
 ```
 
+## Refactor Phases (0-9)
+
+- `Phase 0 - Baseline + Safety Nets`: done
+  - baseline tests/dev checks established
+  - health endpoint present and validated
+- `Phase 1 - Structure Scaffolding`: done
+  - created modular `src/server/*`, `src/shared/*`, and `src/client/*` targets
+- `Phase 2 - Config + Constants`: done
+  - extracted env/constants/paths and logger foundations
+- `Phase 3 - Storage Layer`: done
+  - moved JSON persistence into repository modules with atomic writes
+- `Phase 4 - LM Studio + SSE Abstractions`: done
+  - isolated LM Studio client, stream parser, SSE helpers
+- `Phase 5 - Orchestration Extraction`: done
+  - extracted multi-stage pipeline orchestrator into dedicated service modules
+- `Phase 6 - Thin Route Modules`: done
+  - extracted routes and shared middleware
+  - added route registrar and route inventory (`docs/route-inventory.md`)
+- `Phase 7 - Frontend Re-Org (incremental)`: done
+  - added feature-first client structure
+  - extracted browser client modules with fallback-compatible wiring
+- `Phase 8 - Type Hardening + DTO Alignment`: done
+  - added shared contracts (`src/shared/types/contracts.js`)
+  - added boundary guards and contract tests
+- `Phase 9 - Cleanup + Optional Improvements`: done
+  - request-id middleware + structured logging
+  - `/api/models` short TTL cache (15s)
+  - debounced UI localStorage writes
+
 ## Backend Structure (Refactor In Progress)
 
 - Runtime behavior remains unchanged while backend internals are being modularized.
@@ -158,7 +192,12 @@ npm test
   - `src/server/config/env.js` for env-derived runtime paths/defaults
   - `src/server/config/constants.js` for shared server constants/stage metadata
   - `src/server/state/runtimeState.js` for in-process mutable runtime state
+  - `src/shared/types/contracts.js` for shared JSDoc contracts and lightweight runtime guards
 - `server.js` remains the bootstrap/route host during incremental extraction.
+- Phase 9 operational improvements:
+  - request context middleware adds/propagates `x-request-id`
+  - structured JSON logs include request metadata and duration
+  - `/api/models` uses short in-memory caching (default TTL: 15s, reset on base URL change)
 
 ## GitHub Notes
 
