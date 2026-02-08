@@ -1,9 +1,8 @@
 const express = require("express");
-const fs = require("node:fs/promises");
 const path = require("node:path");
 const { randomUUID } = require("node:crypto");
 const { PORT, DEFAULT_BASE_URL } = require("./src/server/config/env");
-const { DATA_DIR, PUBLIC_DIR, AGENTS_FILE, CONFIG_FILE, PIPELINES_FILE, RUNS_FILE } = require("./src/server/config/paths");
+const { PUBLIC_DIR, AGENTS_FILE, CONFIG_FILE, PIPELINES_FILE, RUNS_FILE } = require("./src/server/config/paths");
 const {
   DEFAULT_SYSTEM_PROMPT,
   HISTORY_LIMIT,
@@ -22,6 +21,21 @@ const {
   loadConfig: loadConfigFromStore,
   saveConfig: saveConfigToStore
 } = require("./src/server/storage/configRepo");
+const {
+  ensureAgentsFile,
+  loadAgents: loadAgentsFromStore,
+  saveAgents: saveAgentsToStore
+} = require("./src/server/storage/agentsRepo");
+const {
+  ensurePipelinesFile,
+  loadPipelines: loadPipelinesFromStore,
+  savePipelines: savePipelinesToStore
+} = require("./src/server/storage/pipelinesRepo");
+const {
+  ensureRunsFile,
+  loadRuns: loadRunsFromStore,
+  saveRuns: saveRunsToStore
+} = require("./src/server/storage/runsRepo");
 
 const app = express();
 let agents = runtimeState.agents;
@@ -1097,35 +1111,16 @@ function hydrateAgent(raw) {
   };
 }
 
-function stripUtf8Bom(text) {
-  return typeof text === "string" && text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
-}
-
 async function ensureDataFiles() {
-  await fs.mkdir(DATA_DIR, { recursive: true });
-
   await ensureConfigFileInStore({
     configFile: CONFIG_FILE,
     defaultBaseUrl: DEFAULT_BASE_URL
   });
-
-  try {
-    await fs.access(AGENTS_FILE);
-  } catch {
-    await fs.writeFile(AGENTS_FILE, "[]\n", "utf-8");
-  }
-
-  try {
-    await fs.access(PIPELINES_FILE);
-  } catch {
-    await fs.writeFile(PIPELINES_FILE, "[]\n", "utf-8");
-  }
-
-  try {
-    await fs.access(RUNS_FILE);
-  } catch {
-    await fs.writeFile(RUNS_FILE, "[]\n", "utf-8");
-  }
+  await Promise.all([
+    ensureAgentsFile({ agentsFile: AGENTS_FILE }),
+    ensurePipelinesFile({ pipelinesFile: PIPELINES_FILE }),
+    ensureRunsFile({ runsFile: RUNS_FILE })
+  ]);
 }
 
 async function loadConfig() {
@@ -1138,59 +1133,35 @@ async function loadConfig() {
 }
 
 async function loadAgents() {
-  try {
-    const contents = stripUtf8Bom(await fs.readFile(AGENTS_FILE, "utf-8"));
-    const parsed = JSON.parse(contents);
-    const list = Array.isArray(parsed) ? parsed : [];
-    agents = list.map(hydrateAgent);
-    runtimeState.agents = agents;
-  } catch {
-    agents = [];
-    runtimeState.agents = agents;
-    await saveAgents();
-  }
+  const list = await loadAgentsFromStore({ agentsFile: AGENTS_FILE });
+  agents = list.map(hydrateAgent);
+  runtimeState.agents = agents;
 }
 
 async function loadPipelines() {
-  try {
-    const contents = stripUtf8Bom(await fs.readFile(PIPELINES_FILE, "utf-8"));
-    const parsed = JSON.parse(contents);
-    const list = Array.isArray(parsed) ? parsed : [];
-    pipelines = list.map(hydratePipeline);
-    runtimeState.pipelines = pipelines;
-  } catch {
-    pipelines = [];
-    runtimeState.pipelines = pipelines;
-    await savePipelines();
-  }
+  const list = await loadPipelinesFromStore({ pipelinesFile: PIPELINES_FILE });
+  pipelines = list.map(hydratePipeline);
+  runtimeState.pipelines = pipelines;
 }
 
 async function loadRuns() {
-  try {
-    const contents = stripUtf8Bom(await fs.readFile(RUNS_FILE, "utf-8"));
-    const parsed = JSON.parse(contents);
-    const list = Array.isArray(parsed) ? parsed : [];
-    runs = list.map(hydrateRun).slice(-RUNS_LIMIT);
-    runtimeState.runs = runs;
+  const list = await loadRunsFromStore({ runsFile: RUNS_FILE });
+  runs = list.map(hydrateRun).slice(-RUNS_LIMIT);
+  runtimeState.runs = runs;
 
-    let changed = false;
-    for (const run of runs) {
-      if (run.status !== "running") {
-        continue;
-      }
-      run.status = "failed";
-      run.failedStage = run.failedStage || "unknown";
-      run.errorMessage = run.errorMessage || "Run was interrupted by server restart.";
-      run.errorAt = new Date().toISOString();
-      run.updatedAt = run.errorAt;
-      changed = true;
+  let changed = false;
+  for (const run of runs) {
+    if (run.status !== "running") {
+      continue;
     }
-    if (changed) {
-      await saveRuns();
-    }
-  } catch {
-    runs = [];
-    runtimeState.runs = runs;
+    run.status = "failed";
+    run.failedStage = run.failedStage || "unknown";
+    run.errorMessage = run.errorMessage || "Run was interrupted by server restart.";
+    run.errorAt = new Date().toISOString();
+    run.updatedAt = run.errorAt;
+    changed = true;
+  }
+  if (changed) {
     await saveRuns();
   }
 }
@@ -1203,15 +1174,24 @@ async function saveConfig() {
 }
 
 async function saveAgents() {
-  await fs.writeFile(AGENTS_FILE, JSON.stringify(agents, null, 2) + "\n", "utf-8");
+  await saveAgentsToStore({
+    agentsFile: AGENTS_FILE,
+    agents
+  });
 }
 
 async function savePipelines() {
-  await fs.writeFile(PIPELINES_FILE, JSON.stringify(pipelines, null, 2) + "\n", "utf-8");
+  await savePipelinesToStore({
+    pipelinesFile: PIPELINES_FILE,
+    pipelines
+  });
 }
 
 async function saveRuns() {
-  await fs.writeFile(RUNS_FILE, JSON.stringify(runs, null, 2) + "\n", "utf-8");
+  await saveRunsToStore({
+    runsFile: RUNS_FILE,
+    runs
+  });
 }
 
 function agentToClient(agent) {

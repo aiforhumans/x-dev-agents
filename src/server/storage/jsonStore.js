@@ -9,11 +9,14 @@ function stripUtf8Bom(text) {
   return typeof text === "string" && text.charCodeAt(0) === 0xfeff ? text.slice(1) : text;
 }
 
-async function readJson(filePath, fallback) {
+async function readJson(filePath, fallback, { strict = false } = {}) {
   try {
     const contents = stripUtf8Bom(await fs.readFile(filePath, "utf-8"));
     return JSON.parse(contents);
   } catch {
+    if (strict) {
+      throw new Error(`Failed to read JSON file: ${filePath}`);
+    }
     return fallback;
   }
 }
