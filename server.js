@@ -2,69 +2,35 @@ const express = require("express");
 const fs = require("node:fs/promises");
 const path = require("node:path");
 const { randomUUID } = require("node:crypto");
+const {
+  PORT,
+  DATA_DIR,
+  AGENTS_FILE,
+  CONFIG_FILE,
+  PIPELINES_FILE,
+  RUNS_FILE,
+  DEFAULT_BASE_URL
+} = require("./src/server/config/env");
+const {
+  DEFAULT_SYSTEM_PROMPT,
+  HISTORY_LIMIT,
+  RUNS_LIMIT,
+  WEB_SEARCH_MAX_RESULTS,
+  WEB_SEARCH_TIMEOUT_MS,
+  CANONICAL_PIPELINE_STAGES,
+  CANONICAL_STAGE_IDS,
+  RUN_STATUS_VALUES,
+  RUN_STREAM_HEARTBEAT_MS
+} = require("./src/server/config/constants");
+const runtimeState = require("./src/server/state/runtimeState");
 
 const app = express();
-const PORT = Number(process.env.PORT || 3000);
-const DATA_DIR = path.join(process.cwd(), "data");
-const AGENTS_FILE = path.join(DATA_DIR, "agents.json");
-const CONFIG_FILE = path.join(DATA_DIR, "config.json");
-const PIPELINES_FILE = path.join(DATA_DIR, "pipelines.json");
-const RUNS_FILE = path.join(DATA_DIR, "runs.json");
-
-const DEFAULT_BASE_URL = process.env.LM_STUDIO_BASE_URL || "http://localhost:1234/v1";
-const DEFAULT_SYSTEM_PROMPT = "You are a helpful assistant.";
-const HISTORY_LIMIT = 200;
-const RUNS_LIMIT = 2000;
-const WEB_SEARCH_MAX_RESULTS = 5;
-const WEB_SEARCH_TIMEOUT_MS = 8000;
-const CANONICAL_PIPELINE_STAGES = [
-  {
-    stageId: "discovery",
-    role: "discovery",
-    name: "Discovery + Retrieval",
-    defaultArtifactNames: ["evidence.json", "reading_notes.md"]
-  },
-  {
-    stageId: "synthesis",
-    role: "synthesis",
-    name: "Technical Synthesis",
-    defaultArtifactNames: ["foundation_report.md", "claims_table.json"]
-  },
-  {
-    stageId: "draft",
-    role: "draft",
-    name: "Primary Draft",
-    defaultArtifactNames: ["draft_longform.md"]
-  },
-  {
-    stageId: "adapt",
-    role: "adapt",
-    name: "Platform Adapters",
-    defaultArtifactNames: ["platform_pack.md"]
-  },
-  {
-    stageId: "style",
-    role: "style",
-    name: "Style Calibration",
-    defaultArtifactNames: ["platform_pack_styled.md"]
-  },
-  {
-    stageId: "audit",
-    role: "audit",
-    name: "Reflection / Fact Audit",
-    defaultArtifactNames: ["fact_audit.md", "final_pack.md"]
-  }
-];
-const CANONICAL_STAGE_IDS = new Set(CANONICAL_PIPELINE_STAGES.map((stage) => stage.stageId));
-const RUN_STATUS_VALUES = new Set(["queued", "running", "completed", "failed", "cancelled"]);
-const RUN_STREAM_HEARTBEAT_MS = 20_000;
-
-let agents = [];
-let pipelines = [];
-let runs = [];
-let config = { baseUrl: DEFAULT_BASE_URL };
-const runStreamSubscribers = new Map();
-const activePipelineRuns = new Map();
+let agents = runtimeState.agents;
+let pipelines = runtimeState.pipelines;
+let runs = runtimeState.runs;
+let config = runtimeState.config;
+const runStreamSubscribers = runtimeState.runStreamSubscribers;
+const activePipelineRuns = runtimeState.activePipelineRuns;
 
 app.use(express.json({ limit: "20mb" }));
 app.use(express.static(path.join(process.cwd(), "public")));
@@ -1181,8 +1147,10 @@ async function loadAgents() {
     const parsed = JSON.parse(contents);
     const list = Array.isArray(parsed) ? parsed : [];
     agents = list.map(hydrateAgent);
+    runtimeState.agents = agents;
   } catch {
     agents = [];
+    runtimeState.agents = agents;
     await saveAgents();
   }
 }
@@ -1193,8 +1161,10 @@ async function loadPipelines() {
     const parsed = JSON.parse(contents);
     const list = Array.isArray(parsed) ? parsed : [];
     pipelines = list.map(hydratePipeline);
+    runtimeState.pipelines = pipelines;
   } catch {
     pipelines = [];
+    runtimeState.pipelines = pipelines;
     await savePipelines();
   }
 }
@@ -1205,6 +1175,7 @@ async function loadRuns() {
     const parsed = JSON.parse(contents);
     const list = Array.isArray(parsed) ? parsed : [];
     runs = list.map(hydrateRun).slice(-RUNS_LIMIT);
+    runtimeState.runs = runs;
 
     let changed = false;
     for (const run of runs) {
@@ -1223,6 +1194,7 @@ async function loadRuns() {
     }
   } catch {
     runs = [];
+    runtimeState.runs = runs;
     await saveRuns();
   }
 }
@@ -2735,6 +2707,7 @@ app.post("/api/pipelines/:id/run", async (req, res, next) => {
     runs.unshift(run);
     if (runs.length > RUNS_LIMIT) {
       runs = runs.slice(0, RUNS_LIMIT);
+      runtimeState.runs = runs;
     }
     await saveRuns();
 
@@ -2883,6 +2856,7 @@ app.post("/api/runs", async (req, res, next) => {
     runs.unshift(run);
     if (runs.length > RUNS_LIMIT) {
       runs = runs.slice(0, RUNS_LIMIT);
+      runtimeState.runs = runs;
     }
     await saveRuns();
     res.status(201).json(runToClient(run));
@@ -3201,12 +3175,15 @@ module.exports = {
     setTestState(nextState = {}) {
       if (Array.isArray(nextState.agents)) {
         agents = nextState.agents;
+        runtimeState.agents = agents;
       }
       if (Array.isArray(nextState.pipelines)) {
         pipelines = nextState.pipelines;
+        runtimeState.pipelines = pipelines;
       }
       if (Array.isArray(nextState.runs)) {
         runs = nextState.runs;
+        runtimeState.runs = runs;
       }
     },
     getTestState() {
