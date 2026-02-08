@@ -151,6 +151,15 @@ Open `http://localhost:3000`.
 npm test
 ```
 
+## Backend Structure (Refactor In Progress)
+
+- Runtime behavior remains unchanged while backend internals are being modularized.
+- Current extracted modules:
+  - `src/server/config/env.js` for env-derived runtime paths/defaults
+  - `src/server/config/constants.js` for shared server constants/stage metadata
+  - `src/server/state/runtimeState.js` for in-process mutable runtime state
+- `server.js` remains the bootstrap/route host during incremental extraction.
+
 ## GitHub Notes
 
 - `data/config.json` and `data/agents.json` are local runtime files and are not tracked in git.
