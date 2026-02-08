@@ -1,3 +1,5 @@
+![LM Studio Agent Builder](image.png)
+
 # LM Studio Agent Builder
 
 Local web app for creating and testing custom agents backed by the LM Studio API.
