@@ -160,6 +160,7 @@ npm test
   - `src/server/config/env.js` for env-derived runtime paths/defaults
   - `src/server/config/constants.js` for shared server constants/stage metadata
   - `src/server/state/runtimeState.js` for in-process mutable runtime state
+  - `src/shared/types/contracts.js` for shared JSDoc contracts and lightweight runtime guards
 - `server.js` remains the bootstrap/route host during incremental extraction.
 
 ## GitHub Notes

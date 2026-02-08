@@ -1,14 +1,17 @@
 /**
  * MCP integration routes.
  */
+const { getBodyObject } = require("../utils/boundary");
+
 function registerMcpRoutes(app, deps) {
   const { sanitizeIntegrations, buildRequestError, lmStudioJsonRequest, summarizeOutputTypes } = deps;
 
   app.post("/api/mcp/test", async (req, res, next) => {
     try {
-      const model = String(req.body?.model || "").trim();
-      const systemPrompt = String(req.body?.systemPrompt || "").trim();
-      const integrations = sanitizeIntegrations(req.body?.integrations);
+      const body = getBodyObject(req);
+      const model = String(body.model || "").trim();
+      const systemPrompt = String(body.systemPrompt || "").trim();
+      const integrations = sanitizeIntegrations(body.integrations);
 
       if (!model) {
         throw buildRequestError(400, "Model is required.");

@@ -1,6 +1,8 @@
 /**
  * Agent CRUD routes.
  */
+const { getBodyObject } = require("../utils/boundary");
+
 function registerAgentRoutes(app, deps) {
   const { getAgents, saveAgents, sanitizeAgent, agentToClient, buildRequestError, randomUUID } = deps;
 
@@ -11,7 +13,8 @@ function registerAgentRoutes(app, deps) {
   app.post("/api/agents", async (req, res, next) => {
     try {
       const agents = getAgents();
-      const agentInput = sanitizeAgent(req.body);
+      const body = getBodyObject(req);
+      const agentInput = sanitizeAgent(body);
       const now = new Date().toISOString();
       const agent = {
         id: randomUUID(),
@@ -38,7 +41,8 @@ function registerAgentRoutes(app, deps) {
         throw buildRequestError(404, "Agent not found.");
       }
 
-      const updates = sanitizeAgent(req.body);
+      const body = getBodyObject(req);
+      const updates = sanitizeAgent(body);
       const previous = agents[index];
       const updated = {
         ...previous,

@@ -1,6 +1,8 @@
 /**
  * Pipeline template and run kickoff routes.
  */
+const { getBodyObject } = require("../utils/boundary");
+
 function registerPipelineRoutes(app, deps) {
   const {
     getPipelines,
@@ -40,8 +42,9 @@ function registerPipelineRoutes(app, deps) {
   app.post("/api/pipelines", async (req, res, next) => {
     try {
       const pipelines = getPipelines();
-      const input = sanitizePipeline(req.body, { strict: true });
-      const requestedId = sanitizeTrimmedString(req.body?.id, { maxLength: 120 });
+      const body = getBodyObject(req);
+      const input = sanitizePipeline(body, { strict: true });
+      const requestedId = sanitizeTrimmedString(body.id, { maxLength: 120 });
       const now = new Date().toISOString();
 
       if (requestedId) {
@@ -84,7 +87,8 @@ function registerPipelineRoutes(app, deps) {
         throw buildRequestError(404, "Pipeline not found.");
       }
 
-      const updates = sanitizePipeline(req.body, { strict: true });
+      const body = getBodyObject(req);
+      const updates = sanitizePipeline(body, { strict: true });
       const previous = pipelines[index];
       const updated = {
         ...previous,
@@ -121,9 +125,10 @@ function registerPipelineRoutes(app, deps) {
       let runs = getRuns();
       const pipeline = findPipeline(req.params.id);
       orchestration.ensurePipelineReadyForRun(pipeline);
+      const body = getBodyObject(req);
 
       const runInput = sanitizeRunCreate({
-        ...req.body,
+        ...body,
         pipelineId: pipeline.id
       });
 

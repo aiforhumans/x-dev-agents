@@ -1,6 +1,8 @@
 /**
  * Chat routes (history, sync chat, streaming chat).
  */
+const { getBodyObject } = require("../utils/boundary");
+
 function registerChatRoutes(app, deps) {
   const {
     findAgent,
@@ -40,8 +42,9 @@ function registerChatRoutes(app, deps) {
 
   app.post("/api/chat", async (req, res, next) => {
     try {
-      const agentId = String(req.body?.agentId || "").trim();
-      const reset = toBoolean(req.body?.reset, false);
+      const body = getBodyObject(req);
+      const agentId = String(body.agentId || "").trim();
+      const reset = toBoolean(body.reset, false);
       if (!agentId) {
         throw buildRequestError(400, "agentId is required.");
       }
@@ -56,7 +59,7 @@ function registerChatRoutes(app, deps) {
         await saveAgents();
       }
 
-      const messageParts = normalizeMessageParts(req.body?.message, req.body?.messageParts);
+      const messageParts = normalizeMessageParts(body.message, body.messageParts);
       if (!messageParts.length) {
         res.json({ history: agent.chatHistory || [], lastResponseId: agent.lastResponseId || null });
         return;
@@ -96,8 +99,9 @@ function registerChatRoutes(app, deps) {
     let headersSent = false;
 
     try {
-      const agentId = String(req.body?.agentId || "").trim();
-      const reset = toBoolean(req.body?.reset, false);
+      const body = getBodyObject(req);
+      const agentId = String(body.agentId || "").trim();
+      const reset = toBoolean(body.reset, false);
       if (!agentId) {
         throw buildRequestError(400, "agentId is required.");
       }
@@ -112,7 +116,7 @@ function registerChatRoutes(app, deps) {
         await saveAgents();
       }
 
-      const messageParts = normalizeMessageParts(req.body?.message, req.body?.messageParts);
+      const messageParts = normalizeMessageParts(body.message, body.messageParts);
       if (!messageParts.length) {
         throw buildRequestError(400, "A message or messageParts payload is required.");
       }

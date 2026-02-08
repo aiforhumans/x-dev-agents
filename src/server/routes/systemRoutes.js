@@ -1,6 +1,8 @@
 /**
  * System/config/model routes.
  */
+const { getBodyObject } = require("../utils/boundary");
+
 function registerSystemRoutes(app, deps) {
   const {
     getConfig,
@@ -31,8 +33,9 @@ function registerSystemRoutes(app, deps) {
 
   app.put("/api/config", async (req, res, next) => {
     try {
+      const body = getBodyObject(req);
       const config = getConfig();
-      config.baseUrl = normalizeBaseUrl(req.body?.baseUrl);
+      config.baseUrl = normalizeBaseUrl(body.baseUrl);
       await saveConfig();
       res.json(config);
     } catch (error) {

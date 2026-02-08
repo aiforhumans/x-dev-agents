@@ -1,6 +1,8 @@
 /**
  * Run CRUD and SSE stream routes.
  */
+const { getBodyObject, getQueryObject } = require("../utils/boundary");
+
 function registerRunRoutes(app, deps) {
   const {
     getRuns,
@@ -30,9 +32,10 @@ function registerRunRoutes(app, deps) {
   app.get("/api/runs", (req, res, next) => {
     try {
       const runs = getRuns();
-      const pipelineId = sanitizeTrimmedString(req.query?.pipelineId, { maxLength: 120 });
-      const statusQuery = sanitizeTrimmedString(req.query?.status, { maxLength: 240 });
-      const limit = clamp(toInteger(req.query?.limit, 100), 1, 500);
+      const query = getQueryObject(req);
+      const pipelineId = sanitizeTrimmedString(query.pipelineId, { maxLength: 120 });
+      const statusQuery = sanitizeTrimmedString(query.status, { maxLength: 240 });
+      const limit = clamp(toInteger(query.limit, 100), 1, 500);
 
       let list = [...runs];
       if (pipelineId) {
@@ -129,7 +132,8 @@ function registerRunRoutes(app, deps) {
   app.post("/api/runs", async (req, res, next) => {
     try {
       let runs = getRuns();
-      const input = sanitizeRunCreate(req.body);
+      const body = getBodyObject(req);
+      const input = sanitizeRunCreate(body);
       const pipeline = findPipeline(input.pipelineId);
       const now = new Date().toISOString();
       const run = {
@@ -161,7 +165,8 @@ function registerRunRoutes(app, deps) {
       }
 
       const previous = runs[index];
-      const updates = sanitizeRunUpdate(req.body, previous);
+      const body = getBodyObject(req);
+      const updates = sanitizeRunUpdate(body, previous);
       const updated = {
         ...previous,
         ...updates,
@@ -183,7 +188,8 @@ function registerRunRoutes(app, deps) {
         throw buildRequestError(404, "Run not found.");
       }
 
-      const logs = sanitizeRunLogs([req.body]);
+      const body = getBodyObject(req);
+      const logs = sanitizeRunLogs([body]);
       if (!logs.length) {
         throw buildRequestError(400, "A non-empty log message is required.");
       }
