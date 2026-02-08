@@ -116,8 +116,18 @@
               <label for="agentSystemPrompt">System Prompt</label>
               <textarea id="agentSystemPrompt" rows="7"></textarea>
 
-              <label for="agentIntegrations">Integrations (JSON array or one plugin id per line)</label>
-              <textarea id="agentIntegrations" rows="5" placeholder='["mcp/your_server"]'></textarea>
+              <label for="agentMcpPlugins">MCP Plugins (from `mcp.json`, one per line)</label>
+              <textarea id="agentMcpPlugins" rows="4" placeholder="mcp/playwright"></textarea>
+
+              <label for="agentEphemeralMcp">Ephemeral MCP Servers (JSON array)</label>
+              <textarea
+                id="agentEphemeralMcp"
+                rows="6"
+                placeholder='[{"server_label":"my-remote-mcp","server_url":"https://example.com/mcp","headers":{"Authorization":"Bearer TOKEN"},"allowed_tools":["tool_a"]}]'
+              ></textarea>
+
+              <label for="agentIntegrations">Extra Integrations (advanced JSON array)</label>
+              <textarea id="agentIntegrations" rows="4" placeholder='[{"type":"plugin","id":"mcp/custom","allowed_tools":["tool_a"]}]'></textarea>
             </div>
 
             <div class="toggle-row">
@@ -129,9 +139,14 @@
                 <input id="agentStream" type="checkbox" />
                 <span>Stream responses</span>
               </label>
+              <label class="checkbox-field" for="agentWebSearch">
+                <input id="agentWebSearch" type="checkbox" />
+                <span>Enable online search context (DuckDuckGo)</span>
+              </label>
             </div>
 
             <div class="row">
+              <button id="mcpTestBtn" type="button">Test MCP</button>
               <button id="saveAgentBtn" type="submit">Save Agent</button>
               <button id="deleteAgentBtn" class="danger" type="button">Delete</button>
             </div>

@@ -12,6 +12,8 @@ const CONFIG_FILE = path.join(DATA_DIR, "config.json");
 const DEFAULT_BASE_URL = process.env.LM_STUDIO_BASE_URL || "http://localhost:1234/v1";
 const DEFAULT_SYSTEM_PROMPT = "You are a helpful assistant.";
 const HISTORY_LIMIT = 200;
+const WEB_SEARCH_MAX_RESULTS = 5;
+const WEB_SEARCH_TIMEOUT_MS = 8000;
 
 let agents = [];
 let config = { baseUrl: DEFAULT_BASE_URL };
@@ -275,6 +277,12 @@ function sanitizeHistoryItem(item) {
   if (item.output !== undefined) {
     normalized.output = item.output;
   }
+  if (item.providerInfo !== undefined) {
+    normalized.providerInfo = item.providerInfo;
+  }
+  if (item.provider_info !== undefined) {
+    normalized.providerInfo = item.provider_info;
+  }
   if (item.metadata !== undefined) {
     normalized.metadata = item.metadata;
   }
@@ -324,6 +332,7 @@ function sanitizeAgent(raw) {
   const reasoning = sanitizeReasoning(raw?.reasoning);
   const store = toBoolean(raw?.store, true);
   const stream = toBoolean(raw?.stream, true);
+  const webSearch = toBoolean(raw?.webSearch, false);
   const integrations = sanitizeIntegrations(raw?.integrations);
 
   return {
@@ -341,6 +350,7 @@ function sanitizeAgent(raw) {
     reasoning,
     store,
     stream,
+    webSearch,
     integrations
   };
 }
@@ -362,6 +372,7 @@ function hydrateAgent(raw) {
     reasoning: null,
     store: true,
     stream: true,
+    webSearch: false,
     integrations: [],
     chatHistory: [],
     lastResponseId: null,
@@ -389,6 +400,7 @@ function hydrateAgent(raw) {
   const reasoning = sanitizeReasoning(raw.reasoning);
   const store = toBoolean(raw.store, true);
   const stream = toBoolean(raw.stream, true);
+  const webSearch = toBoolean(raw.webSearch, false);
   const integrations = sanitizeIntegrations(raw.integrations, false);
   const chatHistory = sanitizeChatHistory(raw.chatHistory || raw.history);
   const lastResponseId =
@@ -413,6 +425,7 @@ function hydrateAgent(raw) {
     reasoning,
     store,
     stream,
+    webSearch,
     integrations,
     chatHistory,
     lastResponseId: store ? lastResponseId : null,
@@ -490,6 +503,7 @@ function agentToClient(agent) {
     reasoning: agent.reasoning,
     store: agent.store,
     stream: agent.stream,
+    webSearch: agent.webSearch === true,
     integrations: agent.integrations,
     lastResponseId: agent.lastResponseId,
     lastStats: agent.lastStats,
@@ -591,6 +605,165 @@ function summarizeUserInput(parts) {
   return textSummary;
 }
 
+function extractMessageText(parts) {
+  return parts
+    .filter((part) => part.type === "message")
+    .map((part) => String(part.content || "").trim())
+    .filter(Boolean)
+    .join("\n")
+    .trim();
+}
+
+function truncateText(text, maxLength = 280) {
+  const value = String(text || "").trim();
+  if (value.length <= maxLength) {
+    return value;
+  }
+  return `${value.slice(0, maxLength - 1).trimEnd()}…`;
+}
+
+function appendSearchResult(results, { title = "", url = "", snippet = "" }) {
+  const normalized = {
+    title: truncateText(title, 140),
+    url: String(url || "").trim(),
+    snippet: truncateText(snippet, 280)
+  };
+
+  if (!normalized.title && !normalized.snippet) {
+    return;
+  }
+
+  const duplicate = results.some((existing) => {
+    if (normalized.url && existing.url) {
+      return normalized.url === existing.url;
+    }
+    return existing.title === normalized.title && existing.snippet === normalized.snippet;
+  });
+  if (!duplicate) {
+    results.push(normalized);
+  }
+}
+
+function collectRelatedTopics(topics, results) {
+  if (!Array.isArray(topics)) {
+    return;
+  }
+
+  for (const topic of topics) {
+    if (Array.isArray(topic?.Topics)) {
+      collectRelatedTopics(topic.Topics, results);
+      continue;
+    }
+    appendSearchResult(results, {
+      title: topic?.Text || "",
+      url: topic?.FirstURL || "",
+      snippet: topic?.Text || ""
+    });
+  }
+}
+
+async function searchOnline(query) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), WEB_SEARCH_TIMEOUT_MS);
+
+  try {
+    const searchUrl = new URL("https://api.duckduckgo.com/");
+    searchUrl.searchParams.set("q", query);
+    searchUrl.searchParams.set("format", "json");
+    searchUrl.searchParams.set("no_html", "1");
+    searchUrl.searchParams.set("no_redirect", "1");
+    searchUrl.searchParams.set("skip_disambig", "1");
+
+    const response = await fetch(searchUrl, {
+      method: "GET",
+      headers: {
+        Accept: "application/json"
+      },
+      signal: controller.signal
+    });
+
+    if (!response.ok) {
+      throw new Error(`Search request failed (${response.status}).`);
+    }
+
+    const payload = await parseJsonResponse(response);
+    const results = [];
+
+    appendSearchResult(results, {
+      title: payload?.Heading || "",
+      url: payload?.AbstractURL || "",
+      snippet: payload?.AbstractText || ""
+    });
+
+    if (Array.isArray(payload?.Results)) {
+      for (const item of payload.Results) {
+        appendSearchResult(results, {
+          title: item?.Text || "",
+          url: item?.FirstURL || "",
+          snippet: item?.Text || ""
+        });
+      }
+    }
+
+    collectRelatedTopics(payload?.RelatedTopics, results);
+    return results.slice(0, WEB_SEARCH_MAX_RESULTS);
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
+function buildSearchContext(query, results) {
+  if (!results.length) {
+    return "";
+  }
+
+  const lines = [
+    `Online search context for: "${query}"`,
+    `Retrieved at: ${new Date().toISOString()}`,
+    "Use these references when useful and cite URLs when relying on them."
+  ];
+
+  for (const [index, result] of results.entries()) {
+    lines.push(`[${index + 1}] ${result.title || "Result"}`);
+    if (result.url) {
+      lines.push(`URL: ${result.url}`);
+    }
+    if (result.snippet) {
+      lines.push(`Snippet: ${result.snippet}`);
+    }
+  }
+
+  return lines.join("\n");
+}
+
+async function enrichMessageWithSearch(agent, messageParts) {
+  if (!agent?.webSearch) {
+    return messageParts;
+  }
+
+  const query = extractMessageText(messageParts);
+  if (!query) {
+    return messageParts;
+  }
+
+  try {
+    const results = await searchOnline(query);
+    if (!results.length) {
+      return messageParts;
+    }
+
+    const searchContext = buildSearchContext(query, results);
+    if (!searchContext) {
+      return messageParts;
+    }
+
+    return [{ type: "message", content: searchContext }, ...messageParts];
+  } catch (error) {
+    console.warn("Online search unavailable, continuing without search context:", error.message || error);
+    return messageParts;
+  }
+}
+
 function buildChatRequest(agent, inputParts, { stream = false, reset = false } = {}) {
   const payload = {
     model: agent.model,
@@ -668,7 +841,8 @@ function buildOutputHistoryItems(result) {
         content,
         tool: outputItem.tool || null,
         arguments: outputItem.arguments ?? null,
-        output: outputItem.output ?? null
+        output: outputItem.output ?? null,
+        providerInfo: outputItem.provider_info ?? outputItem.providerInfo ?? null
       });
       continue;
     }
@@ -701,6 +875,18 @@ function buildOutputHistoryItems(result) {
   }
 
   return items;
+}
+
+function summarizeOutputTypes(result) {
+  const output = Array.isArray(result?.output) ? result.output : [];
+  const counts = {};
+
+  for (const item of output) {
+    const type = String(item?.type || "unknown").trim().toLowerCase() || "unknown";
+    counts[type] = (counts[type] || 0) + 1;
+  }
+
+  return counts;
 }
 
 function resetConversation(agent) {
@@ -821,6 +1007,56 @@ app.get("/api/agents", (req, res) => {
   res.json(agents.map(agentToClient));
 });
 
+app.post("/api/mcp/test", async (req, res, next) => {
+  try {
+    const model = String(req.body?.model || "").trim();
+    const systemPrompt = String(req.body?.systemPrompt || "").trim();
+    const integrations = sanitizeIntegrations(req.body?.integrations);
+
+    if (!model) {
+      throw buildRequestError(400, "Model is required.");
+    }
+    if (!integrations.length) {
+      throw buildRequestError(400, "At least one integration is required.");
+    }
+
+    const payload = {
+      model,
+      input:
+        "MCP integration test. If MCP tools are available, briefly confirm and include any discovered tool names.",
+      stream: false,
+      store: false,
+      temperature: 0,
+      max_output_tokens: 160,
+      integrations
+    };
+    if (systemPrompt) {
+      payload.system_prompt = systemPrompt;
+    }
+
+    const result = await lmStudioJsonRequest({
+      endpoint: "/chat",
+      method: "POST",
+      body: payload,
+      native: true
+    });
+
+    const output = Array.isArray(result?.output) ? result.output : [];
+    const toolSignalsDetected = output.some((item) => {
+      const type = String(item?.type || "").trim().toLowerCase();
+      return type === "tool_call" || type === "invalid_tool_call";
+    });
+
+    res.json({
+      ok: true,
+      toolSignalsDetected,
+      outputTypes: summarizeOutputTypes(result)
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
 app.post("/api/agents", async (req, res, next) => {
   try {
     const agentInput = sanitizeAgent(req.body);
@@ -924,7 +1160,8 @@ app.post("/api/chat", async (req, res, next) => {
       role: "user",
       content: summarizeUserInput(messageParts)
     };
-    const payload = buildChatRequest(agent, messageParts, {
+    const enrichedMessageParts = await enrichMessageWithSearch(agent, messageParts);
+    const payload = buildChatRequest(agent, enrichedMessageParts, {
       stream: false,
       reset
     });
@@ -979,7 +1216,8 @@ app.post("/api/chat/stream", async (req, res) => {
       content: summarizeUserInput(messageParts)
     };
 
-    const payload = buildChatRequest(agent, messageParts, {
+    const enrichedMessageParts = await enrichMessageWithSearch(agent, messageParts);
+    const payload = buildChatRequest(agent, enrichedMessageParts, {
       stream: true,
       reset
     });

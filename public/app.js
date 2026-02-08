@@ -28,9 +28,13 @@ const elements = {
   agentContextLength: document.getElementById("agentContextLength"),
   agentReasoning: document.getElementById("agentReasoning"),
   agentSystemPrompt: document.getElementById("agentSystemPrompt"),
+  agentMcpPlugins: document.getElementById("agentMcpPlugins"),
+  agentEphemeralMcp: document.getElementById("agentEphemeralMcp"),
   agentIntegrations: document.getElementById("agentIntegrations"),
+  mcpTestBtn: document.getElementById("mcpTestBtn"),
   agentStore: document.getElementById("agentStore"),
   agentStream: document.getElementById("agentStream"),
+  agentWebSearch: document.getElementById("agentWebSearch"),
   deleteAgentBtn: document.getElementById("deleteAgentBtn"),
   chatTitle: document.getElementById("chatTitle"),
   chatLog: document.getElementById("chatLog"),
@@ -134,9 +138,12 @@ function resetAgentForm() {
   elements.agentContextLength.value = "";
   elements.agentReasoning.value = "";
   elements.agentSystemPrompt.value = DEFAULT_SYSTEM_PROMPT;
+  elements.agentMcpPlugins.value = "";
+  elements.agentEphemeralMcp.value = "";
   elements.agentIntegrations.value = "";
   elements.agentStore.checked = true;
   elements.agentStream.checked = true;
+  elements.agentWebSearch.checked = false;
   renderModelOptions();
   elements.deleteAgentBtn.disabled = true;
 }
@@ -154,11 +161,17 @@ function fillAgentForm(agent) {
   elements.agentContextLength.value = toInputValue(agent.contextLength);
   elements.agentReasoning.value = agent.reasoning || "";
   elements.agentSystemPrompt.value = agent.systemPrompt || "";
-  elements.agentIntegrations.value = Array.isArray(agent.integrations)
-    ? JSON.stringify(agent.integrations, null, 2)
+  const integrations = splitIntegrationsForForm(agent.integrations);
+  elements.agentMcpPlugins.value = integrations.mcpPluginIds.join("\n");
+  elements.agentEphemeralMcp.value = integrations.ephemeralMcp.length
+    ? JSON.stringify(integrations.ephemeralMcp, null, 2)
+    : "";
+  elements.agentIntegrations.value = integrations.extraIntegrations.length
+    ? JSON.stringify(integrations.extraIntegrations, null, 2)
     : "";
   elements.agentStore.checked = agent.store !== false;
   elements.agentStream.checked = agent.stream !== false;
+  elements.agentWebSearch.checked = agent.webSearch === true;
   renderModelOptions(agent.model || "");
   elements.deleteAgentBtn.disabled = false;
 }
@@ -208,7 +221,11 @@ function renderMessage(item) {
       item.output !== undefined && item.output !== null
         ? `output: ${escapeHtml(JSON.stringify(item.output))}`
         : "";
-    [tool, args, out].filter(Boolean).forEach((line) => extras.push(`<div>${line}</div>`));
+    const providerInfo =
+      item.providerInfo !== undefined && item.providerInfo !== null
+        ? `provider_info: ${escapeHtml(JSON.stringify(item.providerInfo))}`
+        : "";
+    [tool, args, out, providerInfo].filter(Boolean).forEach((line) => extras.push(`<div>${line}</div>`));
   }
 
   if (item.responseId) {
@@ -282,12 +299,167 @@ function parseIntegrations(raw) {
   }
 }
 
+function parseMcpPluginIds(raw) {
+  const lines = String(raw || "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+
+  const unique = new Set();
+  for (const id of lines) {
+    if (!id.startsWith("mcp/")) {
+      throw new Error(`MCP plugin id must start with "mcp/": ${id}`);
+    }
+    unique.add(id);
+  }
+
+  return [...unique];
+}
+
+function normalizeAllowedTools(value) {
+  if (value === null || value === undefined || value === "") {
+    return null;
+  }
+
+  let tools = value;
+  if (typeof tools === "string") {
+    tools = tools
+      .split(",")
+      .map((tool) => tool.trim())
+      .filter(Boolean);
+  }
+
+  if (!Array.isArray(tools)) {
+    throw new Error("allowed_tools must be an array or comma-separated string.");
+  }
+
+  const normalized = tools.map((tool) => String(tool || "").trim()).filter(Boolean);
+  return normalized.length ? normalized : null;
+}
+
+function parseEphemeralMcpIntegrations(raw) {
+  const text = String(raw || "").trim();
+  if (!text) {
+    return [];
+  }
+
+  let parsed = null;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    throw new Error("Ephemeral MCP servers must be a valid JSON array.");
+  }
+
+  if (!Array.isArray(parsed)) {
+    throw new Error("Ephemeral MCP servers must be a JSON array.");
+  }
+
+  return parsed.map((entry, index) => {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
+      throw new Error(`Ephemeral MCP entry #${index + 1} must be an object.`);
+    }
+
+    const type = String(entry.type || "ephemeral_mcp").trim().toLowerCase();
+    if (type !== "ephemeral_mcp") {
+      throw new Error(`Ephemeral MCP entry #${index + 1} has unsupported type: ${type}.`);
+    }
+
+    const serverLabel = String(entry.server_label || entry.serverLabel || "").trim();
+    const serverUrl = String(entry.server_url || entry.serverUrl || "").trim();
+    if (!serverLabel || !serverUrl) {
+      throw new Error(`Ephemeral MCP entry #${index + 1} requires server_label and server_url.`);
+    }
+
+    const normalized = {
+      type: "ephemeral_mcp",
+      server_label: serverLabel,
+      server_url: serverUrl
+    };
+
+    if (entry.headers !== undefined) {
+      if (!entry.headers || typeof entry.headers !== "object" || Array.isArray(entry.headers)) {
+        throw new Error(`Ephemeral MCP entry #${index + 1} headers must be an object.`);
+      }
+      normalized.headers = entry.headers;
+    }
+
+    const allowedTools = normalizeAllowedTools(entry.allowed_tools ?? entry.allowedTools);
+    if (allowedTools) {
+      normalized.allowed_tools = allowedTools;
+    }
+
+    return normalized;
+  });
+}
+
+function splitIntegrationsForForm(rawIntegrations) {
+  const result = {
+    mcpPluginIds: [],
+    ephemeralMcp: [],
+    extraIntegrations: []
+  };
+
+  if (!Array.isArray(rawIntegrations)) {
+    return result;
+  }
+
+  const pluginIds = new Set();
+  for (const integration of rawIntegrations) {
+    if (typeof integration === "string") {
+      if (integration.startsWith("mcp/")) {
+        pluginIds.add(integration);
+      } else {
+        result.extraIntegrations.push(integration);
+      }
+      continue;
+    }
+
+    if (!integration || typeof integration !== "object") {
+      continue;
+    }
+
+    const type = String(integration.type || "").trim().toLowerCase();
+    if (type === "ephemeral_mcp") {
+      result.ephemeralMcp.push({
+        type: "ephemeral_mcp",
+        server_label: integration.server_label || integration.serverLabel || "",
+        server_url: integration.server_url || integration.serverUrl || "",
+        ...(integration.headers ? { headers: integration.headers } : {}),
+        ...(Array.isArray(integration.allowed_tools) && integration.allowed_tools.length
+          ? { allowed_tools: integration.allowed_tools }
+          : {})
+      });
+      continue;
+    }
+
+    if (
+      type === "plugin" &&
+      typeof integration.id === "string" &&
+      integration.id.startsWith("mcp/") &&
+      !Array.isArray(integration.allowed_tools)
+    ) {
+      pluginIds.add(integration.id);
+      continue;
+    }
+
+    result.extraIntegrations.push(integration);
+  }
+
+  result.mcpPluginIds = [...pluginIds];
+  return result;
+}
+
 function collectAgentForm() {
   const temperatureRaw = elements.agentTemperature.value.trim();
   const temperature = temperatureRaw ? Number(temperatureRaw) : 0.7;
   if (!Number.isFinite(temperature)) {
     throw new Error("Temperature must be a valid number.");
   }
+
+  const mcpPluginIds = parseMcpPluginIds(elements.agentMcpPlugins.value);
+  const ephemeralMcpIntegrations = parseEphemeralMcpIntegrations(elements.agentEphemeralMcp.value);
+  const extraIntegrations = parseIntegrations(elements.agentIntegrations.value);
+  const integrations = [...mcpPluginIds, ...ephemeralMcpIntegrations, ...extraIntegrations];
 
   return {
     name: elements.agentName.value.trim(),
@@ -302,10 +474,22 @@ function collectAgentForm() {
     contextLength: parseOptionalNumber(elements.agentContextLength.value, { integer: true }),
     reasoning: elements.agentReasoning.value || null,
     systemPrompt: elements.agentSystemPrompt.value.trim(),
-    integrations: parseIntegrations(elements.agentIntegrations.value),
+    integrations,
     store: elements.agentStore.checked,
-    stream: elements.agentStream.checked
+    stream: elements.agentStream.checked,
+    webSearch: elements.agentWebSearch.checked
   };
+}
+
+function summarizeOutputTypes(outputTypes) {
+  if (!outputTypes || typeof outputTypes !== "object") {
+    return "none";
+  }
+  const entries = Object.entries(outputTypes).filter(([, count]) => Number(count) > 0);
+  if (!entries.length) {
+    return "none";
+  }
+  return entries.map(([type, count]) => `${type}:${count}`).join(", ");
 }
 
 async function loadConfig() {
@@ -657,6 +841,40 @@ function bindEvents() {
       setStatus("Agent deleted.");
     } catch (error) {
       setStatus(error.message, true);
+    }
+  });
+
+  elements.mcpTestBtn.addEventListener("click", async () => {
+    const originalText = elements.mcpTestBtn.textContent;
+    elements.mcpTestBtn.disabled = true;
+    elements.mcpTestBtn.textContent = "Testing...";
+
+    try {
+      const payload = collectAgentForm();
+      if (!payload.model) {
+        throw new Error("Select a model before testing MCP.");
+      }
+      if (!Array.isArray(payload.integrations) || !payload.integrations.length) {
+        throw new Error("Add at least one MCP integration before testing.");
+      }
+
+      const result = await api("/api/mcp/test", {
+        method: "POST",
+        body: JSON.stringify({
+          model: payload.model,
+          systemPrompt: payload.systemPrompt,
+          integrations: payload.integrations
+        })
+      });
+
+      const toolSignal = result.toolSignalsDetected ? "tool signal detected" : "no tool signal";
+      const outputTypes = summarizeOutputTypes(result.outputTypes);
+      setStatus(`MCP test passed (${toolSignal}; output: ${outputTypes}).`);
+    } catch (error) {
+      setStatus(error.message, true);
+    } finally {
+      elements.mcpTestBtn.disabled = false;
+      elements.mcpTestBtn.textContent = originalText;
     }
   });
 

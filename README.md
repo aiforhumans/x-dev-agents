@@ -13,6 +13,7 @@ Local web app for creating and testing custom agents backed by the LM Studio API
 - Chat through LM Studio native responses API (`/api/v1/chat`).
 - Stream responses via SSE and render live output in the UI.
 - Send multimodal messages (text + image attachments as data URLs).
+- Optional online search context (DuckDuckGo) per agent via `webSearch` toggle.
 - Persist agent definitions, chat history, response chain IDs, and stats in `data/`.
 - Render assistant output types from LM Studio:
   - `message`
@@ -26,6 +27,31 @@ Local web app for creating and testing custom agents backed by the LM Studio API
 - Node.js 18+ (tested with Node 25).
 - LM Studio running locally with the local server enabled.
   - Default API base URL: `http://localhost:1234/v1`
+
+## MCP Setup
+
+- This app sends MCP integrations using LM Studio's `integrations` field for `/api/v1/chat`.
+- For `mcp.json` servers, enable LM Studio setting: **Developer > Use mcp.json servers**.
+- LM Studio can read `mcp.json` from:
+  - the process working directory, or
+  - `~/.lmstudio/mcp.json`
+- In the agent form:
+  - **MCP Plugins** accepts IDs like `mcp/playwright` (one per line).
+  - **Ephemeral MCP Servers** accepts JSON array entries with `server_label` and `server_url`.
+  - **Extra Integrations** is for advanced integration objects (including plugin objects with `allowed_tools`).
+  - **Test MCP** sends a lightweight `/api/v1/chat` probe with current integrations and reports whether tool-call signals were detected.
+
+## MCP Test API
+
+- Endpoint: `POST /api/mcp/test`
+- Request body:
+  - `model` (string, required)
+  - `systemPrompt` (string, optional)
+  - `integrations` (array, required)
+- Response:
+  - `ok` (boolean)
+  - `toolSignalsDetected` (boolean)
+  - `outputTypes` (object with output type counts)
 
 ## Run
 
