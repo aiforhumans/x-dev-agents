@@ -23,6 +23,11 @@ const {
   RUN_STREAM_HEARTBEAT_MS
 } = require("./src/server/config/constants");
 const runtimeState = require("./src/server/state/runtimeState");
+const {
+  ensureConfigFile: ensureConfigFileInStore,
+  loadConfig: loadConfigFromStore,
+  saveConfig: saveConfigToStore
+} = require("./src/server/storage/configRepo");
 
 const app = express();
 let agents = runtimeState.agents;
@@ -1105,11 +1110,10 @@ function stripUtf8Bom(text) {
 async function ensureDataFiles() {
   await fs.mkdir(DATA_DIR, { recursive: true });
 
-  try {
-    await fs.access(CONFIG_FILE);
-  } catch {
-    await fs.writeFile(CONFIG_FILE, JSON.stringify({ baseUrl: DEFAULT_BASE_URL }, null, 2), "utf-8");
-  }
+  await ensureConfigFileInStore({
+    configFile: CONFIG_FILE,
+    defaultBaseUrl: DEFAULT_BASE_URL
+  });
 
   try {
     await fs.access(AGENTS_FILE);
@@ -1131,14 +1135,12 @@ async function ensureDataFiles() {
 }
 
 async function loadConfig() {
-  try {
-    const contents = stripUtf8Bom(await fs.readFile(CONFIG_FILE, "utf-8"));
-    const parsed = JSON.parse(contents);
-    config.baseUrl = normalizeBaseUrl(parsed.baseUrl || DEFAULT_BASE_URL);
-  } catch {
-    config.baseUrl = normalizeBaseUrl(DEFAULT_BASE_URL);
-    await saveConfig();
-  }
+  const loaded = await loadConfigFromStore({
+    configFile: CONFIG_FILE,
+    defaultBaseUrl: DEFAULT_BASE_URL,
+    normalizeBaseUrl
+  });
+  config.baseUrl = loaded.baseUrl;
 }
 
 async function loadAgents() {
@@ -1200,7 +1202,10 @@ async function loadRuns() {
 }
 
 async function saveConfig() {
-  await fs.writeFile(CONFIG_FILE, JSON.stringify(config, null, 2), "utf-8");
+  await saveConfigToStore({
+    configFile: CONFIG_FILE,
+    config
+  });
 }
 
 async function saveAgents() {
