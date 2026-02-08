@@ -1,7 +1,8 @@
 const DEFAULT_SYSTEM_PROMPT = "You are a helpful assistant.";
-const GROUP_STATE_PREFIX = "ui.agentForm.groupState.";
-const LEFT_PANE_WIDTH_STORAGE_KEY = "ui.layout.leftPaneWidthPx";
-const NEW_AGENT_GROUP_KEY = "__new__";
+const APP_CLIENT = typeof globalThis !== "undefined" ? globalThis.AppClient || {} : {};
+const GROUP_STATE_PREFIX = APP_CLIENT.uiKeys?.agentFormGroupStatePrefix || "ui.agentForm.groupState.";
+const LEFT_PANE_WIDTH_STORAGE_KEY = APP_CLIENT.uiKeys?.leftPaneWidthPx || "ui.layout.leftPaneWidthPx";
+const NEW_AGENT_GROUP_KEY = APP_CLIENT.uiKeys?.newAgentGroupStateId || "__new__";
 const MIN_LEFT_PANE_WIDTH = 360;
 const MIN_RIGHT_PANE_WIDTH = 560;
 const DESKTOP_BREAKPOINT = 1080;
@@ -391,6 +392,10 @@ function bindNodeGroupPersistence() {
 }
 
 async function api(path, options = {}) {
+  if (APP_CLIENT.api && typeof APP_CLIENT.api.request === "function") {
+    return APP_CLIENT.api.request(path, options);
+  }
+
   const response = await fetch(path, {
     headers: {
       "Content-Type": "application/json",
