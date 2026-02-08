@@ -14,6 +14,7 @@ const RESIZER_WIDTH = 12;
 const MAX_IMAGE_ATTACHMENT_BYTES = 8 * 1024 * 1024;
 const STORAGE_WRITE_DEBOUNCE_MS = 120;
 const NODE_GROUP_KEYS = ["basics", "model", "sampling", "output", "runtime", "webSearch", "mcp", "diagnostics"];
+const GROUP_ROLE_KEYS = ["discovery", "synthesis", "draft", "adapt", "style", "audit"];
 const DEFAULT_GROUP_STATE = {
   basics: true,
   model: true,
@@ -29,7 +30,9 @@ const state = {
   baseUrl: "",
   models: [],
   agents: [],
+  agentGroups: [],
   selectedAgentId: null,
+  selectedAgentGroupId: null,
   chatHistory: [],
   isStreaming: false,
   leftPaneWidthPx: null,
@@ -54,6 +57,22 @@ const elements = {
   saveBaseUrlBtn: document.getElementById("saveBaseUrlBtn"),
   testConnectionBtn: document.getElementById("testConnectionBtn"),
   agentList: document.getElementById("agentList"),
+  agentGroupList: document.getElementById("agentGroupList"),
+  agentGroupForm: document.getElementById("agentGroupForm"),
+  agentGroupId: document.getElementById("agentGroupId"),
+  agentGroupName: document.getElementById("agentGroupName"),
+  agentGroupDescription: document.getElementById("agentGroupDescription"),
+  groupRoleDiscovery: document.getElementById("groupRoleDiscovery"),
+  groupRoleSynthesis: document.getElementById("groupRoleSynthesis"),
+  groupRoleDraft: document.getElementById("groupRoleDraft"),
+  groupRoleAdapt: document.getElementById("groupRoleAdapt"),
+  groupRoleStyle: document.getElementById("groupRoleStyle"),
+  groupRoleAudit: document.getElementById("groupRoleAudit"),
+  groupRunTopic: document.getElementById("groupRunTopic"),
+  newAgentGroupBtn: document.getElementById("newAgentGroupBtn"),
+  saveAgentGroupBtn: document.getElementById("saveAgentGroupBtn"),
+  runAgentGroupBtn: document.getElementById("runAgentGroupBtn"),
+  deleteAgentGroupBtn: document.getElementById("deleteAgentGroupBtn"),
   newAgentBtn: document.getElementById("newAgentBtn"),
   agentForm: document.getElementById("agentForm"),
   agentId: document.getElementById("agentId"),
@@ -510,6 +529,147 @@ function renderAgentList() {
     })
     .join("");
   elements.agentList.innerHTML = html;
+}
+
+function getRoleSelectElement(role) {
+  return (
+    {
+      discovery: elements.groupRoleDiscovery,
+      synthesis: elements.groupRoleSynthesis,
+      draft: elements.groupRoleDraft,
+      adapt: elements.groupRoleAdapt,
+      style: elements.groupRoleStyle,
+      audit: elements.groupRoleAudit
+    }[role] || null
+  );
+}
+
+function getSelectedAgentGroup() {
+  return state.agentGroups.find((group) => group.groupId === state.selectedAgentGroupId) || null;
+}
+
+function renderGroupAgentOptions() {
+  const options = [
+    '<option value="">Select agent</option>',
+    ...state.agents.map((agent) => `<option value="${escapeHtml(agent.id)}">${escapeHtml(agent.name)}</option>`)
+  ].join("");
+
+  for (const role of GROUP_ROLE_KEYS) {
+    const select = getRoleSelectElement(role);
+    if (!select) {
+      continue;
+    }
+    const current = String(select.value || "");
+    select.innerHTML = options;
+    if (state.agents.some((agent) => agent.id === current)) {
+      select.value = current;
+    }
+  }
+}
+
+function renderAgentGroupList() {
+  if (!elements.agentGroupList) {
+    return;
+  }
+  if (!state.agentGroups.length) {
+    elements.agentGroupList.innerHTML = '<li class="agent-group-item empty">No groups yet.</li>';
+    return;
+  }
+
+  elements.agentGroupList.innerHTML = state.agentGroups
+    .map((group) => {
+      const selected = group.groupId === state.selectedAgentGroupId ? "selected" : "";
+      return `<li class="agent-group-item ${selected}" data-group-id="${escapeHtml(group.groupId)}">
+        <strong>${escapeHtml(group.name)}</strong>
+        <small>${escapeHtml(group.description || "sequential team")}</small>
+      </li>`;
+    })
+    .join("");
+}
+
+function resetAgentGroupForm() {
+  if (!elements.agentGroupForm) {
+    return;
+  }
+  state.selectedAgentGroupId = null;
+  if (elements.agentGroupId) {
+    elements.agentGroupId.value = "";
+  }
+  if (elements.agentGroupName) {
+    elements.agentGroupName.value = "";
+  }
+  if (elements.agentGroupDescription) {
+    elements.agentGroupDescription.value = "";
+  }
+  if (elements.groupRunTopic) {
+    elements.groupRunTopic.value = "";
+  }
+  for (const role of GROUP_ROLE_KEYS) {
+    const select = getRoleSelectElement(role);
+    if (select) {
+      select.value = "";
+    }
+  }
+  if (elements.deleteAgentGroupBtn) {
+    elements.deleteAgentGroupBtn.disabled = true;
+  }
+  renderAgentGroupList();
+}
+
+function fillAgentGroupForm(group) {
+  if (!group || !elements.agentGroupForm) {
+    return;
+  }
+  state.selectedAgentGroupId = group.groupId;
+  if (elements.agentGroupId) {
+    elements.agentGroupId.value = group.groupId || "";
+  }
+  if (elements.agentGroupName) {
+    elements.agentGroupName.value = group.name || "";
+  }
+  if (elements.agentGroupDescription) {
+    elements.agentGroupDescription.value = group.description || "";
+  }
+  for (const role of GROUP_ROLE_KEYS) {
+    const select = getRoleSelectElement(role);
+    if (select) {
+      select.value = String(group.roles?.[role] || "");
+    }
+  }
+  if (elements.deleteAgentGroupBtn) {
+    elements.deleteAgentGroupBtn.disabled = false;
+  }
+  renderAgentGroupList();
+}
+
+function collectAgentGroupForm() {
+  const roles = {};
+  for (const role of GROUP_ROLE_KEYS) {
+    const select = getRoleSelectElement(role);
+    const agentId = String(select?.value || "").trim();
+    if (!agentId) {
+      throw new Error(`Select an agent for ${role}.`);
+    }
+    roles[role] = agentId;
+  }
+
+  const payload = {
+    name: String(elements.agentGroupName?.value || "").trim(),
+    description: String(elements.agentGroupDescription?.value || "").trim(),
+    roles,
+    execution: {
+      mode: "sequential"
+    }
+  };
+  if (!payload.name) {
+    throw new Error("Agent group name is required.");
+  }
+
+  const groupId = String(elements.agentGroupId?.value || "").trim();
+  if (groupId) {
+    payload.groupId = groupId;
+  }
+  return payload;
 }
 
 function renderModelOptions(selectedModel = "") {
@@ -1261,6 +1421,18 @@ async function loadAgents() {
     state.selectedAgentId = null;
   }
   renderAgentList();
+  renderGroupAgentOptions();
+}
+
+async function loadAgentGroups() {
+  const payload = await api("/api/agent-groups");
+  state.agentGroups = Array.isArray(payload) ? payload : [];
+  if (!state.selectedAgentGroupId && state.agentGroups.length) {
+    state.selectedAgentGroupId = state.agentGroups[0].groupId;
+  } else if (!state.agentGroups.some((group) => group.groupId === state.selectedAgentGroupId)) {
+    state.selectedAgentGroupId = null;
+  }
+  renderAgentGroupList();
 }
 
 async function loadHistory() {
@@ -1516,6 +1688,9 @@ async function sendChatStreaming(agentId, message, messageParts, optimisticHisto
 
 async function initialize() {
   elements.deleteAgentBtn.disabled = true;
+  if (elements.deleteAgentGroupBtn) {
+    elements.deleteAgentGroupBtn.disabled = true;
+  }
   initializeResizableLayout();
   bindNodeGroupPersistence();
   bindEvents();
@@ -1542,7 +1717,9 @@ async function initialize() {
 
   try {
     await loadAgents();
+    await loadAgentGroups();
     const selected = getSelectedAgent();
+    const selectedGroup = getSelectedAgentGroup();
     if (selected) {
       fillAgentForm(selected);
       loadGroupStateForCurrentAgent();
@@ -1551,6 +1728,11 @@ async function initialize() {
       resetAgentForm();
       loadGroupStateForCurrentAgent();
       renderChat([], { forceScroll: true });
+    }
+    if (selectedGroup) {
+      fillAgentGroupForm(selectedGroup);
+    } else {
+      resetAgentGroupForm();
     }
   } catch (error) {
     setStatus(error.message, true);
@@ -1620,6 +1802,24 @@ function bindEvents() {
     }
   });
 
+  if (elements.agentGroupList) {
+    elements.agentGroupList.addEventListener("click", (event) => {
+      if (!event.target || typeof event.target.closest !== "function") {
+        return;
+      }
+      const item = event.target.closest("[data-group-id]");
+      if (!item) {
+        return;
+      }
+      const group = state.agentGroups.find((entry) => entry.groupId === item.dataset.groupId);
+      if (!group) {
+        return;
+      }
+      fillAgentGroupForm(group);
+      setStatus("Agent group selected.");
+    });
+  }
+
   elements.newAgentBtn.addEventListener("click", () => {
     state.selectedAgentId = null;
     renderAgentList();
@@ -1628,6 +1828,13 @@ function bindEvents() {
     renderChat([], { forceScroll: true });
     setStatus("Creating new agent.");
   });
+
+  if (elements.newAgentGroupBtn) {
+    elements.newAgentGroupBtn.addEventListener("click", () => {
+      resetAgentGroupForm();
+      setStatus("Creating new group.");
+    });
+  }
 
   elements.refreshModelsBtn.addEventListener("click", async () => {
     try {
@@ -1685,6 +1892,80 @@ function bindEvents() {
       setStatus(error.message, true);
     }
   });
+
+  if (elements.agentGroupForm) {
+    elements.agentGroupForm.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      try {
+        const payload = collectAgentGroupForm();
+        const saved = await api("/api/agent-groups", {
+          method: "POST",
+          body: JSON.stringify(payload)
+        });
+        await loadAgentGroups();
+        fillAgentGroupForm(saved);
+        setStatus(payload.groupId ? "Group updated." : "Group created.");
+      } catch (error) {
+        setStatus(error.message, true);
+      }
+    });
+  }
+
+  if (elements.deleteAgentGroupBtn) {
+    elements.deleteAgentGroupBtn.addEventListener("click", async () => {
+      const id = String(elements.agentGroupId?.value || "").trim();
+      if (!id) {
+        return;
+      }
+      const confirmed = window.confirm("Delete this group?");
+      if (!confirmed) {
+        return;
+      }
+      try {
+        await api(`/api/agent-groups/${id}`, { method: "DELETE" });
+        await loadAgentGroups();
+        const selectedGroup = getSelectedAgentGroup();
+        if (selectedGroup) {
+          fillAgentGroupForm(selectedGroup);
+        } else {
+          resetAgentGroupForm();
+        }
+        setStatus("Group deleted.");
+      } catch (error) {
+        setStatus(error.message, true);
+      }
+    });
+  }
+
+  if (elements.runAgentGroupBtn) {
+    elements.runAgentGroupBtn.addEventListener("click", async () => {
+      const group = getSelectedAgentGroup();
+      if (!group) {
+        setStatus("Select a group first.", true);
+        return;
+      }
+      const topic = String(elements.groupRunTopic?.value || "").trim();
+      if (!topic) {
+        setStatus("Group run topic is required.", true);
+        return;
+      }
+      const original = elements.runAgentGroupBtn.textContent;
+      elements.runAgentGroupBtn.disabled = true;
+      elements.runAgentGroupBtn.textContent = "Running...";
+      try {
+        const payload = await api(`/api/agent-groups/${group.groupId}/run`, {
+          method: "POST",
+          body: JSON.stringify({ topic })
+        });
+        setStatus(`Group run started: ${payload.runId}`);
+      } catch (error) {
+        setStatus(error.message, true);
+      } finally {
+        elements.runAgentGroupBtn.disabled = false;
+        elements.runAgentGroupBtn.textContent = original;
+      }
+    });
+  }
 
   elements.deleteAgentBtn.addEventListener("click", async () => {
     const id = elements.agentId.value.trim();

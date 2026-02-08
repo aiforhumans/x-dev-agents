@@ -4,7 +4,7 @@ Current backend HTTP routes and expected response shapes.
 
 ## System
 - `GET /api/health`
-  - `200`: `{ ok, baseUrl, nativeApiBaseUrl, agentCount, pipelineCount, runCount }`
+  - `200`: `{ ok, baseUrl, nativeApiBaseUrl, agentCount, agentGroupCount, pipelineCount, runCount }`
 - `GET /api/config`
   - `200`: `{ baseUrl }`
 - `PUT /api/config`
@@ -24,6 +24,23 @@ Current backend HTTP routes and expected response shapes.
   - `200`: `AgentClient`
 - `DELETE /api/agents/:id`
   - `200`: `{ deleted: true }`
+
+## Agent Groups
+- `GET /api/agent-groups`
+  - `200`: `AgentGroupClient[]`
+- `GET /api/agent-groups/:id`
+  - `200`: `AgentGroupClient`
+- `POST /api/agent-groups`
+  - Body: agent group payload
+  - `201` create or `200` update-by-id: `AgentGroupClient`
+- `PUT /api/agent-groups/:id`
+  - Body: agent group payload
+  - `200`: `AgentGroupClient`
+- `DELETE /api/agent-groups/:id`
+  - `200`: `{ deleted: true }`
+- `POST /api/agent-groups/:id/run`
+  - Body: run create payload (topic/seedLinks/brandVoice/targetPlatforms/toolsPolicy/outputs)
+  - `202`: `{ runId }`
 
 ## MCP
 - `POST /api/mcp/test`

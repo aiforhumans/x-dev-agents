@@ -26,9 +26,21 @@
  */
 
 /**
+ * @typedef {Object} AgentGroup
+ * @property {string} groupId
+ * @property {string} name
+ * @property {string} [description]
+ * @property {Object.<string, string>} roles
+ * @property {{mode: "sequential", enabledStages?: string[]}} execution
+ * @property {Object} [defaults]
+ */
+
+/**
  * @typedef {Object} Run
  * @property {string} runId
- * @property {string} pipelineId
+ * @property {string|null} pipelineId
+ * @property {string|null} [groupId]
+ * @property {Object|null} [groupSnapshot]
  * @property {string} status
  * @property {string} createdAt
  * @property {string} updatedAt

@@ -2,7 +2,14 @@ const express = require("express");
 const path = require("node:path");
 const { randomUUID } = require("node:crypto");
 const { PORT, DEFAULT_BASE_URL } = require("./src/server/config/env");
-const { PUBLIC_DIR, AGENTS_FILE, CONFIG_FILE, PIPELINES_FILE, RUNS_FILE } = require("./src/server/config/paths");
+const {
+  PUBLIC_DIR,
+  AGENTS_FILE,
+  AGENT_GROUPS_FILE,
+  CONFIG_FILE,
+  PIPELINES_FILE,
+  RUNS_FILE
+} = require("./src/server/config/paths");
 const {
   DEFAULT_SYSTEM_PROMPT,
   HISTORY_LIMIT,
@@ -37,6 +44,11 @@ const {
   saveAgents: saveAgentsToStore
 } = require("./src/server/storage/agentsRepo");
 const {
+  ensureAgentGroupsFile,
+  loadAgentGroups: loadAgentGroupsFromStore,
+  saveAgentGroups: saveAgentGroupsToStore
+} = require("./src/server/storage/agentGroupsRepo");
+const {
   ensurePipelinesFile,
   loadPipelines: loadPipelinesFromStore,
   savePipelines: savePipelinesToStore
@@ -49,6 +61,7 @@ const {
 
 const app = express();
 let agents = runtimeState.agents;
+let agentGroups = runtimeState.agentGroups;
 let pipelines = runtimeState.pipelines;
 let runs = runtimeState.runs;
 let config = runtimeState.config;
@@ -609,6 +622,139 @@ function hydratePipeline(raw) {
   };
 }
 
+function sanitizeEnabledStages(raw, { strict = true } = {}) {
+  if (raw === undefined || raw === null) {
+    return CANONICAL_PIPELINE_STAGES.map((stage) => stage.stageId);
+  }
+  if (!Array.isArray(raw)) {
+    if (strict) {
+      throw buildRequestError(400, "execution.enabledStages must be an array.");
+    }
+    return CANONICAL_PIPELINE_STAGES.map((stage) => stage.stageId);
+  }
+
+  const seen = new Set();
+  const list = [];
+  for (const value of raw) {
+    const stageId = roleKeyFromText(value);
+    if (!stageId || !CANONICAL_STAGE_IDS.has(stageId) || seen.has(stageId)) {
+      continue;
+    }
+    seen.add(stageId);
+    list.push(stageId);
+  }
+
+  if (!list.length && strict) {
+    throw buildRequestError(400, "execution.enabledStages must include at least one canonical stage.");
+  }
+  return list.length ? list : CANONICAL_PIPELINE_STAGES.map((stage) => stage.stageId);
+}
+
+function sanitizeAgentGroupDefaults(raw) {
+  if (!isPlainObject(raw)) {
+    return null;
+  }
+
+  const defaults = {};
+  if (raw.toolsPolicy !== undefined || raw.tools_policy !== undefined) {
+    defaults.toolsPolicy = sanitizeToolsPolicy(raw.toolsPolicy ?? raw.tools_policy);
+  }
+  if (raw.outputs !== undefined) {
+    defaults.outputs = sanitizePipelineOutputs(raw.outputs);
+  }
+  if (raw.targetPlatforms !== undefined) {
+    defaults.targetPlatforms = sanitizeStringArray(raw.targetPlatforms, { maxItems: 40, maxLength: 140 });
+  }
+  if (raw.brandVoice !== undefined) {
+    defaults.brandVoice = sanitizeTrimmedString(raw.brandVoice, { maxLength: 4000, allowEmpty: true }) || "";
+  }
+
+  return Object.keys(defaults).length ? defaults : null;
+}
+
+function sanitizeAgentGroup(raw, { strict = true } = {}) {
+  const name = sanitizeTrimmedString(raw?.name, { maxLength: 140 });
+  if (strict && !name) {
+    throw buildRequestError(400, "Agent group name is required.");
+  }
+
+  const execution = isPlainObject(raw?.execution) ? raw.execution : {};
+  const mode = sanitizeTrimmedString(execution.mode, { maxLength: 40 }) || "sequential";
+  if (mode !== "sequential") {
+    throw buildRequestError(400, "Agent group execution.mode must be sequential.");
+  }
+
+  const roles = sanitizeAgentsByRole(raw?.roles ?? raw?.agentsByRole, { strict });
+  const enabledStages = sanitizeEnabledStages(execution.enabledStages ?? execution.enabled_stages, { strict: false });
+
+  return {
+    name: name || "Untitled Agent Group",
+    description: sanitizeTrimmedString(raw?.description, { maxLength: 2000, allowEmpty: true }) || "",
+    roles,
+    execution: {
+      mode: "sequential",
+      enabledStages
+    },
+    defaults: sanitizeAgentGroupDefaults(raw?.defaults)
+  };
+}
+
+function hydrateAgentGroup(raw) {
+  const now = new Date().toISOString();
+  const normalized = sanitizeAgentGroup(raw, { strict: false });
+  const groupId =
+    sanitizeTrimmedString(raw?.groupId ?? raw?.id, { maxLength: 120 }) ||
+    sanitizeTrimmedString(raw?.group_id, { maxLength: 120 }) ||
+    randomUUID();
+  const createdAt = sanitizeTrimmedString(raw?.createdAt, { maxLength: 60 }) || now;
+  const updatedAt = sanitizeTrimmedString(raw?.updatedAt, { maxLength: 60 }) || createdAt;
+
+  return {
+    groupId,
+    ...normalized,
+    createdAt,
+    updatedAt
+  };
+}
+
+function buildInitialStageStateFromAgentGroup(group) {
+  const enabled = new Set(group?.execution?.enabledStages || []);
+  const syntheticPipeline = {
+    stages: CANONICAL_PIPELINE_STAGES.map((stage, index) => ({
+      stageId: stage.stageId,
+      role: stage.role,
+      name: stage.name,
+      order: index + 1,
+      enabled: enabled.size ? enabled.has(stage.stageId) : true
+    }))
+  };
+  const stageState = buildInitialStageState(syntheticPipeline);
+  for (const stage of CANONICAL_PIPELINE_STAGES) {
+    stageState[stage.stageId].agentId = sanitizeTrimmedString(group?.roles?.[stage.role], { maxLength: 120 }) || null;
+  }
+  return stageState;
+}
+
+function mergeAgentGroupRunDefaults(group, runBody) {
+  const defaults = isPlainObject(group?.defaults) ? group.defaults : {};
+  const payload = isPlainObject(runBody) ? { ...runBody } : {};
+
+  if (payload.toolsPolicy === undefined && payload.tools_policy === undefined && defaults.toolsPolicy !== undefined) {
+    payload.toolsPolicy = defaults.toolsPolicy;
+  }
+  if (payload.outputs === undefined && defaults.outputs !== undefined) {
+    payload.outputs = defaults.outputs;
+  }
+  if (payload.targetPlatforms === undefined && defaults.targetPlatforms !== undefined) {
+    payload.targetPlatforms = defaults.targetPlatforms;
+  }
+  if (payload.brandVoice === undefined && defaults.brandVoice !== undefined) {
+    payload.brandVoice = defaults.brandVoice;
+  }
+
+  return payload;
+}
+
 function sanitizeRunStatus(raw, fallback = "queued", { strict = true } = {}) {
   const status = sanitizeTrimmedString(raw, { maxLength: 40 })?.toLowerCase();
   if (!status) {
@@ -663,6 +809,7 @@ function sanitizeStageState(raw, pipeline) {
     }
 
     current.status = sanitizeRunStatus(source.status, "pending", { strict: false });
+    current.enabled = source.enabled !== undefined ? toBoolean(source.enabled, current.enabled) : current.enabled;
     current.startedAt = sanitizeTrimmedString(source.startedAt, { maxLength: 80, allowEmpty: true }) || null;
     current.completedAt = sanitizeTrimmedString(source.completedAt, { maxLength: 80, allowEmpty: true }) || null;
     current.error = sanitizeTrimmedString(source.error, { maxLength: 4000, allowEmpty: true }) || null;
@@ -831,30 +978,13 @@ function sanitizeRunMetrics(raw) {
   return Object.keys(metrics).length ? metrics : null;
 }
 
-function sanitizeRunCreate(raw) {
-  const pipelineId = sanitizeTrimmedString(raw?.pipelineId, { maxLength: 120 });
-  if (!pipelineId) {
-    throw buildRequestError(400, "pipelineId is required.");
-  }
-  if (!findPipeline(pipelineId)) {
-    throw buildRequestError(404, "Pipeline not found.");
-  }
-
+function sanitizeRunCreateInput(raw) {
   const topic = sanitizeTrimmedString(raw?.topic, { maxLength: 1000 });
   if (!topic) {
     throw buildRequestError(400, "topic is required.");
   }
 
-  const pipeline = findPipeline(pipelineId);
-  const requestedOutputs = sanitizePipelineOutputs(raw?.outputs);
-  const resolvedOutputs = requestedOutputs.length > 0 ? requestedOutputs : sanitizePipelineOutputs(pipeline?.outputs);
-
-  const resolvedToolsPolicy = isPlainObject(raw?.toolsPolicy ?? raw?.tools_policy)
-    ? sanitizeToolsPolicy(raw?.toolsPolicy ?? raw?.tools_policy)
-    : sanitizeToolsPolicy(pipeline?.toolsPolicy);
-
   return {
-    pipelineId,
     status: sanitizeRunStatus(raw?.status, "queued"),
     topic,
     seedLinks: sanitizeSeedLinks(raw?.seedLinks),
@@ -864,12 +994,38 @@ function sanitizeRunCreate(raw) {
     evidence: sanitizeRunEvidence(raw?.evidence),
     logs: sanitizeRunLogs(raw?.logs),
     metrics: sanitizeRunMetrics(raw?.metrics),
-    outputs: resolvedOutputs,
-    toolsPolicy: resolvedToolsPolicy,
-    stageState: buildInitialStageState(pipeline),
+    outputs: sanitizePipelineOutputs(raw?.outputs),
+    toolsPolicy: sanitizeToolsPolicy(raw?.toolsPolicy ?? raw?.tools_policy),
     failedStage: null,
     errorMessage: null,
     errorAt: null
+  };
+}
+
+function sanitizeRunCreate(raw) {
+  const pipelineId = sanitizeTrimmedString(raw?.pipelineId, { maxLength: 120 });
+  if (!pipelineId) {
+    throw buildRequestError(400, "pipelineId is required.");
+  }
+  if (!findPipeline(pipelineId)) {
+    throw buildRequestError(404, "Pipeline not found.");
+  }
+
+  const pipeline = findPipeline(pipelineId);
+  const input = sanitizeRunCreateInput(raw);
+  const resolvedOutputs = input.outputs.length > 0 ? input.outputs : sanitizePipelineOutputs(pipeline?.outputs);
+  const resolvedToolsPolicy =
+    isPlainObject(raw?.toolsPolicy ?? raw?.tools_policy) || raw?.toolsPolicy || raw?.tools_policy
+      ? sanitizeToolsPolicy(raw?.toolsPolicy ?? raw?.tools_policy)
+      : sanitizeToolsPolicy(pipeline?.toolsPolicy);
+  return {
+    pipelineId,
+    ...input,
+    outputs: resolvedOutputs,
+    toolsPolicy: resolvedToolsPolicy,
+    stageState: buildInitialStageState(pipeline),
+    groupId: null,
+    groupSnapshot: null
   };
 }
 
@@ -962,15 +1118,16 @@ function sanitizeRunUpdate(raw, previousRun) {
 
 function hydrateRun(raw) {
   const now = new Date().toISOString();
-  const fallbackPipelineId =
-    sanitizeTrimmedString(raw?.pipelineId, { maxLength: 120 }) ||
-    sanitizeTrimmedString(pipelines[0]?.id, { maxLength: 120 }) ||
-    "";
+  const groupId = sanitizeTrimmedString(raw?.groupId ?? raw?.group_id, { maxLength: 120 }) || null;
+  const requestedPipelineId = sanitizeTrimmedString(raw?.pipelineId, { maxLength: 120 });
+  const fallbackPipelineId = requestedPipelineId || (groupId ? "" : sanitizeTrimmedString(pipelines[0]?.id, { maxLength: 120 }) || "");
   const pipeline = findPipeline(fallbackPipelineId);
 
   const run = {
     runId: sanitizeTrimmedString(raw?.runId || raw?.id, { maxLength: 120 }) || randomUUID(),
-    pipelineId: fallbackPipelineId,
+    pipelineId: fallbackPipelineId || null,
+    groupId,
+    groupSnapshot: isPlainObject(raw?.groupSnapshot) ? raw.groupSnapshot : null,
     createdAt: sanitizeTrimmedString(raw?.createdAt, { maxLength: 60 }) || now,
     updatedAt: sanitizeTrimmedString(raw?.updatedAt, { maxLength: 60 }) || now,
     status: sanitizeRunStatus(raw?.status, "queued", { strict: false }),
@@ -1130,6 +1287,7 @@ async function ensureDataFiles() {
   });
   await Promise.all([
     ensureAgentsFile({ agentsFile: AGENTS_FILE }),
+    ensureAgentGroupsFile({ agentGroupsFile: AGENT_GROUPS_FILE }),
     ensurePipelinesFile({ pipelinesFile: PIPELINES_FILE }),
     ensureRunsFile({ runsFile: RUNS_FILE })
   ]);
@@ -1148,6 +1306,12 @@ async function loadAgents() {
   const list = await loadAgentsFromStore({ agentsFile: AGENTS_FILE });
   agents = list.map(hydrateAgent);
   runtimeState.agents = agents;
+}
+
+async function loadAgentGroups() {
+  const list = await loadAgentGroupsFromStore({ agentGroupsFile: AGENT_GROUPS_FILE });
+  agentGroups = list.map(hydrateAgentGroup);
+  runtimeState.agentGroups = agentGroups;
 }
 
 async function loadPipelines() {
@@ -1189,6 +1353,13 @@ async function saveAgents() {
   await saveAgentsToStore({
     agentsFile: AGENTS_FILE,
     agents
+  });
+}
+
+async function saveAgentGroups() {
+  await saveAgentGroupsToStore({
+    agentGroupsFile: AGENT_GROUPS_FILE,
+    agentGroups
   });
 }
 
@@ -1246,10 +1417,25 @@ function pipelineToClient(pipeline) {
   };
 }
 
+function agentGroupToClient(group) {
+  return {
+    groupId: group.groupId,
+    name: group.name,
+    description: group.description,
+    roles: group.roles,
+    execution: group.execution,
+    defaults: group.defaults,
+    createdAt: group.createdAt,
+    updatedAt: group.updatedAt
+  };
+}
+
 function runToClient(run) {
   return {
     runId: run.runId,
     pipelineId: run.pipelineId,
+    groupId: run.groupId || null,
+    groupSnapshot: run.groupSnapshot || null,
     createdAt: run.createdAt,
     updatedAt: run.updatedAt,
     status: run.status,
@@ -1644,6 +1830,10 @@ function findAgent(agentId) {
   return agents.find((agent) => agent.id === agentId) || null;
 }
 
+function findAgentGroup(groupId) {
+  return agentGroups.find((group) => group.groupId === groupId) || null;
+}
+
 function findPipeline(pipelineId) {
   return pipelines.find((pipeline) => pipeline.id === pipelineId) || null;
 }
@@ -1686,6 +1876,7 @@ registerApiRoutes(app, {
     getConfig: () => config,
     getNativeApiBaseUrl,
     getAgents: () => agents,
+    getAgentGroups: () => agentGroups,
     getPipelines: () => pipelines,
     getRuns: () => runs,
     normalizeBaseUrl,
@@ -1706,6 +1897,28 @@ registerApiRoutes(app, {
     agentToClient,
     buildRequestError,
     randomUUID
+  },
+  agentGroups: {
+    getAgentGroups: () => agentGroups,
+    findAgentGroup,
+    findRun,
+    findAgent,
+    setRuns,
+    getRuns: () => runs,
+    runsLimit: RUNS_LIMIT,
+    saveRuns,
+    saveAgentGroups,
+    sanitizeAgentGroup,
+    sanitizeTrimmedString,
+    sanitizeRunCreateInput,
+    buildInitialStageStateFromAgentGroup,
+    canonicalStages: CANONICAL_PIPELINE_STAGES,
+    buildRequestError,
+    randomUUID,
+    activePipelineRuns,
+    orchestration,
+    agentGroupToClient,
+    mergeAgentGroupRunDefaults
   },
   pipelines: {
     getPipelines: () => pipelines,
@@ -1780,6 +1993,7 @@ async function start() {
   await ensureDataFiles();
   await loadConfig();
   await loadAgents();
+  await loadAgentGroups();
   await loadPipelines();
   await loadRuns();
 
@@ -1794,16 +2008,25 @@ module.exports = {
   __serverInternals: {
     CANONICAL_PIPELINE_STAGES,
     sanitizePipeline,
+    sanitizeAgentGroup,
     sanitizeRunCreate,
+    sanitizeRunCreateInput,
     sanitizeRunUpdate,
     buildInitialStageState,
+    buildInitialStageStateFromAgentGroup,
+    mergeAgentGroupRunDefaults,
     runToClient,
     pipelineToClient,
+    agentGroupToClient,
     ensurePipelineReadyForRun: orchestration.ensurePipelineReadyForRun,
     setTestState(nextState = {}) {
       if (Array.isArray(nextState.agents)) {
         agents = nextState.agents;
         runtimeState.agents = agents;
+      }
+      if (Array.isArray(nextState.agentGroups)) {
+        agentGroups = nextState.agentGroups;
+        runtimeState.agentGroups = agentGroups;
       }
       if (Array.isArray(nextState.pipelines)) {
         pipelines = nextState.pipelines;
@@ -1815,7 +2038,7 @@ module.exports = {
       }
     },
     getTestState() {
-      return { agents, pipelines, runs };
+      return { agents, agentGroups, pipelines, runs };
     }
   }
 };

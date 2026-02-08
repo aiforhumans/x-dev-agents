@@ -40,6 +40,9 @@ Local web app for creating and testing custom agents backed by the LM Studio API
   - run lifecycle status (`queued`, `running`, `completed`, `failed`, `cancelled`)
   - run inputs (`topic`, `seedLinks`, `brandVoice`, `targetPlatforms`)
   - run artifacts, evidence snapshots/citations, logs, and metrics
+- Multi-Agent Groups persisted in `data/agent-groups.json`:
+  - reusable named teams mapped to canonical roles (`discovery`, `synthesis`, `draft`, `adapt`, `style`, `audit`)
+  - sequential execution settings and default run options
 - Render assistant output types from LM Studio:
   - `message`
   - `reasoning` (collapsible)
@@ -94,10 +97,19 @@ Open `http://localhost:3000`.
 - Data files:
   - `data/config.json`
   - `data/agents.json`
+  - `data/agent-groups.json`
   - `data/pipelines.json`
   - `data/runs.json`
 
 ## Content Pipelines API
+
+- Agent Groups:
+  - `GET /api/agent-groups`
+  - `GET /api/agent-groups/:id`
+  - `POST /api/agent-groups` (create or update when `groupId`/`id` is supplied)
+  - `PUT /api/agent-groups/:id`
+  - `DELETE /api/agent-groups/:id`
+  - `POST /api/agent-groups/:id/run` (starts async sequential group orchestration, returns `{ runId }`)
 
 - Pipelines:
   - `GET /api/pipelines`

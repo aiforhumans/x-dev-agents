@@ -39,6 +39,60 @@
           </div>
           <ul id="agentList" class="agent-list"></ul>
 
+          <details id="groupTeams" class="node-group team-group" data-group="teams">
+            <summary>Multi-Agent Groups</summary>
+            <div class="node-group-body">
+              <ul id="agentGroupList" class="agent-group-list"></ul>
+              <form id="agentGroupForm" class="agent-group-form">
+                <input id="agentGroupId" type="hidden" />
+                <label for="agentGroupName">Group Name</label>
+                <input id="agentGroupName" type="text" />
+                <label for="agentGroupDescription">Description</label>
+                <input id="agentGroupDescription" type="text" />
+                <div class="row">
+                  <div>
+                    <label for="groupRoleDiscovery">Discovery</label>
+                    <select id="groupRoleDiscovery"></select>
+                  </div>
+                  <div>
+                    <label for="groupRoleSynthesis">Synthesis</label>
+                    <select id="groupRoleSynthesis"></select>
+                  </div>
+                </div>
+                <div class="row">
+                  <div>
+                    <label for="groupRoleDraft">Draft</label>
+                    <select id="groupRoleDraft"></select>
+                  </div>
+                  <div>
+                    <label for="groupRoleAdapt">Adapt</label>
+                    <select id="groupRoleAdapt"></select>
+                  </div>
+                </div>
+                <div class="row">
+                  <div>
+                    <label for="groupRoleStyle">Style</label>
+                    <select id="groupRoleStyle"></select>
+                  </div>
+                  <div>
+                    <label for="groupRoleAudit">Audit</label>
+                    <select id="groupRoleAudit"></select>
+                  </div>
+                </div>
+                <label for="groupRunTopic">Run Topic</label>
+                <input id="groupRunTopic" type="text" placeholder="What should this group produce?" />
+                <div class="row form-actions">
+                  <button id="newAgentGroupBtn" type="button">New Group</button>
+                  <button id="saveAgentGroupBtn" type="submit">Save Group</button>
+                </div>
+                <div class="row form-actions">
+                  <button id="runAgentGroupBtn" class="secondary" type="button">Run Group</button>
+                  <button id="deleteAgentGroupBtn" class="danger" type="button">Delete Group</button>
+                </div>
+              </form>
+            </div>
+          </details>
+
           <form id="agentForm" class="form">
             <input id="agentId" type="hidden" />
 

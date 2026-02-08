@@ -32,6 +32,31 @@ function createOrchestrator({
     return canonicalStages.find((stage) => stage.stageId === stageId) || null;
   }
 
+  function buildExecutionPipeline(run) {
+    if (isPlainObject(run?.groupSnapshot) && isPlainObject(run.groupSnapshot.roles)) {
+      const enabledStageSet = new Set(
+        Array.isArray(run.groupSnapshot.execution?.enabledStages)
+          ? run.groupSnapshot.execution.enabledStages.map((stageId) => String(stageId || "").trim().toLowerCase())
+          : canonicalStages.map((stage) => stage.stageId)
+      );
+      return {
+        id: `group:${run.groupSnapshot.groupId || run.groupId || "unknown"}`,
+        name: run.groupSnapshot.name || "Agent Group",
+        stages: canonicalStages.map((stage, index) => ({
+          stageId: stage.stageId,
+          role: stage.role,
+          name: stage.name,
+          order: index + 1,
+          enabled: enabledStageSet.has(stage.stageId)
+        })),
+        agentsByRole: { ...run.groupSnapshot.roles },
+        toolsPolicy: run.toolsPolicy,
+        outputs: Array.isArray(run.outputs) ? run.outputs : []
+      };
+    }
+    return findPipeline(run.pipelineId);
+  }
+
   function setRunStageStatus(run, stageId, status, patch = {}) {
     if (!run?.stageState || !run.stageState[stageId]) {
       return;
@@ -112,6 +137,7 @@ function createOrchestrator({
     const data = {
       runId: run.runId,
       pipelineId: run.pipelineId,
+      groupId: run.groupId || null,
       at: new Date().toISOString(),
       ...payload
     };
@@ -465,11 +491,11 @@ function createOrchestrator({
     if (!run) {
       return;
     }
-    const pipeline = findPipeline(run.pipelineId);
+    const pipeline = buildExecutionPipeline(run);
     if (!pipeline) {
       run.status = "failed";
       run.failedStage = "unknown";
-      run.errorMessage = "Pipeline not found.";
+      run.errorMessage = run.groupId ? "Agent group snapshot is invalid." : "Pipeline not found.";
       run.errorAt = new Date().toISOString();
       run.updatedAt = run.errorAt;
       await saveRunsAndBroadcast(run, "run_failed", {
@@ -593,15 +619,15 @@ function createOrchestrator({
     }
   }
 
-  return {
-    getRunSubscribers,
-    streamRunEvent,
-    closeRunStream,
-    saveRunsAndBroadcast,
-    runPipelineOrchestration,
-    ensurePipelineReadyForRun,
-    appendRunLog
-  };
+    return {
+      getRunSubscribers,
+      streamRunEvent,
+      closeRunStream,
+      saveRunsAndBroadcast,
+      runPipelineOrchestration,
+      ensurePipelineReadyForRun,
+      appendRunLog
+    };
 }
 
 module.exports = {

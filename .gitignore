@@ -4,6 +4,7 @@ node_modules/
 # Runtime data (generated locally)
 data/agents.json
 data/config.json
+data/agent-groups.json
 data/pipelines.json
 data/runs.json
 

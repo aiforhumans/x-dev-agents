@@ -8,6 +8,7 @@ function registerSystemRoutes(app, deps) {
     getConfig,
     getNativeApiBaseUrl,
     getAgents,
+    getAgentGroups = () => [],
     getPipelines,
     getRuns,
     normalizeBaseUrl,
@@ -51,6 +52,7 @@ function registerSystemRoutes(app, deps) {
       baseUrl: config.baseUrl,
       nativeApiBaseUrl: getNativeApiBaseUrl(),
       agentCount: getAgents().length,
+      agentGroupCount: getAgentGroups().length,
       pipelineCount: getPipelines().length,
       runCount: getRuns().length
     });

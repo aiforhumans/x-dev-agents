@@ -90,6 +90,7 @@ function registerRunRoutes(app, deps) {
         writeSse(res, terminalEvent, {
           runId: run.runId,
           pipelineId: run.pipelineId,
+          groupId: run.groupId || null,
           status: run.status,
           stageState: run.stageState,
           failedStage: run.failedStage,
@@ -105,6 +106,7 @@ function registerRunRoutes(app, deps) {
       writeSse(res, "run_started", {
         runId: run.runId,
         pipelineId: run.pipelineId,
+        groupId: run.groupId || null,
         status: run.status,
         stageState: run.stageState
       });
