@@ -43,6 +43,7 @@ Local web app for creating and testing custom agents backed by the LM Studio API
 - Multi-Agent Groups persisted in `data/agent-groups.json`:
   - reusable named teams mapped to canonical roles (`discovery`, `synthesis`, `draft`, `adapt`, `style`, `audit`)
   - sequential execution settings and default run options
+  - minimal UI panel for group CRUD and one-click group run kickoff
 - Render assistant output types from LM Studio:
   - `message`
   - `reasoning` (collapsible)
@@ -138,6 +139,7 @@ Open `http://localhost:3000`.
 - `stage_completed`
 - `run_completed`
 - `run_failed`
+- `heartbeat`
 
 ### Canonical Orchestration Stages
 
@@ -197,15 +199,15 @@ npm test
   - `/api/models` short TTL cache (15s)
   - debounced UI localStorage writes
 
-## Backend Structure (Refactor In Progress)
+## Backend Structure
 
-- Runtime behavior remains unchanged while backend internals are being modularized.
+- Runtime behavior has been preserved while backend internals were modularized.
 - Current extracted modules:
   - `src/server/config/env.js` for env-derived runtime paths/defaults
   - `src/server/config/constants.js` for shared server constants/stage metadata
   - `src/server/state/runtimeState.js` for in-process mutable runtime state
   - `src/shared/types/contracts.js` for shared JSDoc contracts and lightweight runtime guards
-- `server.js` remains the bootstrap/route host during incremental extraction.
+- `server.js` remains the bootstrap/route host.
 - Phase 9 operational improvements:
   - request context middleware adds/propagates `x-request-id`
   - structured JSON logs include request metadata and duration
@@ -213,6 +215,6 @@ npm test
 
 ## GitHub Notes
 
-- `data/config.json` and `data/agents.json` are local runtime files and are not tracked in git.
+- `data/config.json`, `data/agents.json`, `data/agent-groups.json`, `data/pipelines.json`, and `data/runs.json` are local runtime files and are not tracked in git.
 - After cloning, run `npm install` and start the app; required data files are created automatically.
 - CI runs `npm test` on pushes to `main` and pull requests.
