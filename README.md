@@ -4,6 +4,12 @@ Local web app for creating and testing custom agents backed by the LM Studio API
 
 ## Features
 
+- ChatGPT-style UI refresh:
+  - wider workspace with a calmer, minimal visual style
+  - resizable editor/chat split on desktop (stored locally)
+  - foldable agent node groups with per-agent open/closed state
+  - compact `+` upload button in the chat composer
+  - hidden chat scrollbar with preserved mouse/touch/trackpad scroll behavior
 - Create, edit, and delete agents with advanced LM Studio chat settings:
   - `temperature`, `top_p`, `top_k`, `min_p`, `repeat_penalty`
   - `max_output_tokens`, `context_length`, `reasoning`
@@ -75,6 +81,13 @@ Open `http://localhost:3000`.
 - If an agent has `store` enabled, the app sends `previous_response_id` for follow-up turns and persists the latest `response_id`.
 - If an agent has `stream` enabled, the app uses `/api/chat/stream` and consumes LM Studio streaming events.
 - Reset Conversation clears local history and clears the persisted `lastResponseId` chain pointer for that agent.
+
+## UI Persistence Notes
+
+- Desktop pane width is stored in localStorage key: `ui.layout.leftPaneWidthPx`.
+- Agent editor fold-state is stored per agent:
+  - `ui.agentForm.groupState.<agentId>`
+  - `ui.agentForm.groupState.__new__` for unsaved new agents.
 
 ## Tests
 

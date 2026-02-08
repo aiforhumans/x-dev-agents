@@ -1,13 +1,43 @@
+const DEFAULT_SYSTEM_PROMPT = "You are a helpful assistant.";
+const GROUP_STATE_PREFIX = "ui.agentForm.groupState.";
+const LEFT_PANE_WIDTH_STORAGE_KEY = "ui.layout.leftPaneWidthPx";
+const NEW_AGENT_GROUP_KEY = "__new__";
+const MIN_LEFT_PANE_WIDTH = 360;
+const MIN_RIGHT_PANE_WIDTH = 560;
+const DESKTOP_BREAKPOINT = 1080;
+const RESIZER_WIDTH = 12;
+const NODE_GROUP_KEYS = ["identity", "model", "generation", "prompt", "mcp", "runtime"];
+const DEFAULT_GROUP_STATE = {
+  identity: true,
+  model: true,
+  generation: false,
+  prompt: false,
+  mcp: false,
+  runtime: false
+};
+
 const state = {
   baseUrl: "",
   models: [],
   agents: [],
   selectedAgentId: null,
   chatHistory: [],
-  isStreaming: false
+  isStreaming: false,
+  leftPaneWidthPx: null
 };
 
+function queryAll(selector) {
+  if (typeof document.querySelectorAll !== "function") {
+    return [];
+  }
+  return Array.from(document.querySelectorAll(selector));
+}
+
 const elements = {
+  layout: document.getElementById("layout"),
+  agentsPanel: document.getElementById("agentsPanel"),
+  chatPanel: document.getElementById("chatPanel"),
+  layoutResizer: document.getElementById("layoutResizer"),
   baseUrlInput: document.getElementById("baseUrlInput"),
   saveBaseUrlBtn: document.getElementById("saveBaseUrlBtn"),
   testConnectionBtn: document.getElementById("testConnectionBtn"),
@@ -39,15 +69,241 @@ const elements = {
   chatTitle: document.getElementById("chatTitle"),
   chatLog: document.getElementById("chatLog"),
   chatForm: document.getElementById("chatForm"),
+  chatAttachBtn: document.getElementById("chatAttachBtn"),
   chatMessage: document.getElementById("chatMessage"),
   chatImages: document.getElementById("chatImages"),
+  chatAttachmentCount: document.getElementById("chatAttachmentCount"),
   resetChatBtn: document.getElementById("resetChatBtn"),
-  statusBar: document.getElementById("statusBar")
+  statusBar: document.getElementById("statusBar"),
+  nodeGroups: queryAll(".node-group[data-group]")
 };
 
 function setStatus(message, isError = false) {
   elements.statusBar.textContent = message;
   elements.statusBar.classList.toggle("error", isError);
+}
+
+function canUseLocalStorage() {
+  return typeof localStorage !== "undefined" && localStorage !== null;
+}
+
+function getFromLocalStorage(key) {
+  if (!canUseLocalStorage()) {
+    return null;
+  }
+  try {
+    return localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function setToLocalStorage(key, value) {
+  if (!canUseLocalStorage()) {
+    return;
+  }
+  try {
+    localStorage.setItem(key, value);
+  } catch {
+    // Ignore storage write failures.
+  }
+}
+
+function isDesktopLayout() {
+  if (typeof window === "undefined" || typeof window.innerWidth !== "number") {
+    return true;
+  }
+  return window.innerWidth > DESKTOP_BREAKPOINT;
+}
+
+function getGroupStateStorageKey(agentId) {
+  const normalizedAgentId = String(agentId || "").trim();
+  return `${GROUP_STATE_PREFIX}${normalizedAgentId || NEW_AGENT_GROUP_KEY}`;
+}
+
+function getCurrentGroupStorageKey() {
+  return getGroupStateStorageKey(state.selectedAgentId);
+}
+
+function sanitizeGroupState(rawState) {
+  const sanitized = { ...DEFAULT_GROUP_STATE };
+  if (!rawState || typeof rawState !== "object") {
+    return sanitized;
+  }
+
+  for (const key of NODE_GROUP_KEYS) {
+    if (rawState[key] === undefined) {
+      continue;
+    }
+    sanitized[key] = Boolean(rawState[key]);
+  }
+
+  return sanitized;
+}
+
+function readStoredGroupState(storageKey) {
+  const raw = getFromLocalStorage(storageKey);
+  if (!raw) {
+    return { ...DEFAULT_GROUP_STATE };
+  }
+
+  try {
+    return sanitizeGroupState(JSON.parse(raw));
+  } catch {
+    return { ...DEFAULT_GROUP_STATE };
+  }
+}
+
+function getCurrentGroupStateFromUi() {
+  const current = { ...DEFAULT_GROUP_STATE };
+  for (const group of elements.nodeGroups) {
+    const key = String(group?.dataset?.group || "").trim();
+    if (!NODE_GROUP_KEYS.includes(key)) {
+      continue;
+    }
+    current[key] = Boolean(group.open);
+  }
+  return current;
+}
+
+function applyGroupStateToUi(groupState) {
+  const normalized = sanitizeGroupState(groupState);
+  for (const group of elements.nodeGroups) {
+    const key = String(group?.dataset?.group || "").trim();
+    if (!NODE_GROUP_KEYS.includes(key)) {
+      continue;
+    }
+    group.open = normalized[key] === true;
+  }
+}
+
+function loadGroupStateForCurrentAgent() {
+  applyGroupStateToUi(readStoredGroupState(getCurrentGroupStorageKey()));
+}
+
+function saveGroupStateForCurrentAgent() {
+  const key = getCurrentGroupStorageKey();
+  const stateFromUi = getCurrentGroupStateFromUi();
+  setToLocalStorage(key, JSON.stringify(stateFromUi));
+}
+
+function clampPaneWidthPx(widthPx, containerWidth) {
+  const minWidth = MIN_LEFT_PANE_WIDTH;
+  const maxWidth = Math.max(minWidth, containerWidth - MIN_RIGHT_PANE_WIDTH - RESIZER_WIDTH);
+  return Math.min(maxWidth, Math.max(minWidth, widthPx));
+}
+
+function getLayoutWidth() {
+  if (!elements.layout || typeof elements.layout.getBoundingClientRect !== "function") {
+    return 0;
+  }
+  return elements.layout.getBoundingClientRect().width || 0;
+}
+
+function applyLeftPaneWidth(widthPx) {
+  if (!elements.layout || !elements.layout.style || typeof elements.layout.style.setProperty !== "function") {
+    return;
+  }
+  elements.layout.style.setProperty("--left-pane-width", `${Math.round(widthPx)}px`);
+  state.leftPaneWidthPx = Math.round(widthPx);
+}
+
+function loadLeftPaneWidth() {
+  if (!isDesktopLayout()) {
+    return;
+  }
+  const raw = Number(getFromLocalStorage(LEFT_PANE_WIDTH_STORAGE_KEY));
+  if (!Number.isFinite(raw)) {
+    return;
+  }
+
+  const layoutWidth = getLayoutWidth();
+  if (!layoutWidth) {
+    return;
+  }
+  applyLeftPaneWidth(clampPaneWidthPx(raw, layoutWidth));
+}
+
+function saveLeftPaneWidth() {
+  if (!Number.isFinite(state.leftPaneWidthPx)) {
+    return;
+  }
+  setToLocalStorage(LEFT_PANE_WIDTH_STORAGE_KEY, String(Math.round(state.leftPaneWidthPx)));
+}
+
+function initializeResizableLayout() {
+  if (!elements.layout || !elements.layoutResizer || typeof elements.layoutResizer.addEventListener !== "function") {
+    return;
+  }
+
+  loadLeftPaneWidth();
+
+  const stopDragging = () => {
+    elements.layout.classList.remove("resizing");
+    if (typeof window !== "undefined" && typeof window.removeEventListener === "function") {
+      window.removeEventListener("pointermove", onPointerMove);
+      window.removeEventListener("pointerup", stopDragging);
+      window.removeEventListener("pointercancel", stopDragging);
+    }
+    saveLeftPaneWidth();
+  };
+
+  const onPointerMove = (event) => {
+    if (!isDesktopLayout()) {
+      return;
+    }
+    const layoutWidth = getLayoutWidth();
+    if (!layoutWidth || typeof elements.layout.getBoundingClientRect !== "function") {
+      return;
+    }
+
+    const layoutRect = elements.layout.getBoundingClientRect();
+    const nextWidth = clampPaneWidthPx(event.clientX - layoutRect.left, layoutWidth);
+    applyLeftPaneWidth(nextWidth);
+  };
+
+  elements.layoutResizer.addEventListener("pointerdown", (event) => {
+    if (!isDesktopLayout()) {
+      return;
+    }
+    if (typeof event.preventDefault === "function") {
+      event.preventDefault();
+    }
+
+    elements.layout.classList.add("resizing");
+    if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
+      window.addEventListener("pointermove", onPointerMove);
+      window.addEventListener("pointerup", stopDragging);
+      window.addEventListener("pointercancel", stopDragging);
+    }
+  });
+
+  if (typeof window !== "undefined" && typeof window.addEventListener === "function") {
+    window.addEventListener("resize", () => {
+      if (!isDesktopLayout()) {
+        return;
+      }
+      if (!Number.isFinite(state.leftPaneWidthPx)) {
+        return;
+      }
+      const layoutWidth = getLayoutWidth();
+      if (!layoutWidth) {
+        return;
+      }
+      applyLeftPaneWidth(clampPaneWidthPx(state.leftPaneWidthPx, layoutWidth));
+    });
+  }
+}
+
+function bindNodeGroupPersistence() {
+  for (const group of elements.nodeGroups) {
+    if (!group || typeof group.addEventListener !== "function") {
+      continue;
+    }
+    group.addEventListener("toggle", () => {
+      saveGroupStateForCurrentAgent();
+    });
+  }
 }
 
 async function api(path, options = {}) {
@@ -258,6 +514,27 @@ function renderChat(history = [], { showTyping = false, streamPreview = "" } = {
 
   elements.chatLog.innerHTML = `${messagesHtml}${typingMarkup}`;
   elements.chatLog.scrollTop = elements.chatLog.scrollHeight;
+}
+
+function updateAttachmentCount() {
+  if (!elements.chatAttachmentCount) {
+    return;
+  }
+  const count = Array.from(elements.chatImages?.files || []).length;
+  if (!count) {
+    elements.chatAttachmentCount.textContent = "";
+    return;
+  }
+  elements.chatAttachmentCount.textContent = count === 1 ? "1 image attached" : `${count} images attached`;
+}
+
+function autoResizeChatMessage() {
+  if (!elements.chatMessage || !elements.chatMessage.style) {
+    return;
+  }
+  elements.chatMessage.style.height = "auto";
+  const next = Math.min(180, Math.max(44, elements.chatMessage.scrollHeight || 44));
+  elements.chatMessage.style.height = `${next}px`;
 }
 
 function parseOptionalNumber(value, { integer = false } = {}) {
@@ -535,6 +812,7 @@ async function onAgentSelected(id) {
   const agent = getSelectedAgent();
   if (agent) {
     fillAgentForm(agent);
+    loadGroupStateForCurrentAgent();
     await loadHistory();
   }
 }
@@ -635,6 +913,7 @@ async function sendChatNonStreaming(agentId, message, messageParts, optimisticHi
   } catch (error) {
     renderChat(previousHistory);
     elements.chatMessage.value = message;
+    autoResizeChatMessage();
     setStatus(error.message, true);
   }
 }
@@ -694,6 +973,7 @@ async function sendChatStreaming(agentId, message, messageParts, optimisticHisto
   } catch (error) {
     renderChat(previousHistory);
     elements.chatMessage.value = message;
+    autoResizeChatMessage();
     setStatus(error.message, true);
   } finally {
     state.isStreaming = false;
@@ -702,7 +982,11 @@ async function sendChatStreaming(agentId, message, messageParts, optimisticHisto
 
 async function initialize() {
   elements.deleteAgentBtn.disabled = true;
+  initializeResizableLayout();
+  bindNodeGroupPersistence();
   bindEvents();
+  updateAttachmentCount();
+  autoResizeChatMessage();
 
   try {
     await loadConfig();
@@ -725,9 +1009,11 @@ async function initialize() {
     const selected = getSelectedAgent();
     if (selected) {
       fillAgentForm(selected);
+      loadGroupStateForCurrentAgent();
       await loadHistory();
     } else {
       resetAgentForm();
+      loadGroupStateForCurrentAgent();
       renderChat([]);
     }
   } catch (error) {
@@ -743,6 +1029,20 @@ async function initialize() {
 }
 
 function bindEvents() {
+  elements.chatAttachBtn.addEventListener("click", () => {
+    if (elements.chatImages && typeof elements.chatImages.click === "function") {
+      elements.chatImages.click();
+    }
+  });
+
+  elements.chatImages.addEventListener("change", () => {
+    updateAttachmentCount();
+  });
+
+  elements.chatMessage.addEventListener("input", () => {
+    autoResizeChatMessage();
+  });
+
   elements.agentList.addEventListener("click", async (event) => {
     const item = event.target.closest("[data-id]");
     if (!item) return;
@@ -758,6 +1058,7 @@ function bindEvents() {
     state.selectedAgentId = null;
     renderAgentList();
     resetAgentForm();
+    loadGroupStateForCurrentAgent();
     renderChat([]);
     setStatus("Creating new agent.");
   });
@@ -811,6 +1112,7 @@ function bindEvents() {
       state.selectedAgentId = savedAgent.id;
       renderAgentList();
       fillAgentForm(savedAgent);
+      loadGroupStateForCurrentAgent();
       await loadHistory();
       setStatus(agentId ? "Agent updated." : "Agent created.");
     } catch (error) {
@@ -833,9 +1135,11 @@ function bindEvents() {
       const selected = getSelectedAgent();
       if (selected) {
         fillAgentForm(selected);
+        loadGroupStateForCurrentAgent();
         await loadHistory();
       } else {
         resetAgentForm();
+        loadGroupStateForCurrentAgent();
         renderChat([]);
       }
       setStatus("Agent deleted.");
@@ -906,6 +1210,8 @@ function bindEvents() {
       renderChat(optimisticHistory, { showTyping: true });
       elements.chatMessage.value = "";
       elements.chatImages.value = "";
+      updateAttachmentCount();
+      autoResizeChatMessage();
 
       const selected = getSelectedAgent();
       if (selected?.stream) {
@@ -916,6 +1222,7 @@ function bindEvents() {
     } catch (error) {
       renderChat(previousHistory);
       elements.chatMessage.value = message;
+      autoResizeChatMessage();
       setStatus(error.message, true);
     }
   });
@@ -940,5 +1247,13 @@ function bindEvents() {
   });
 }
 
-const DEFAULT_SYSTEM_PROMPT = "You are a helpful assistant.";
+if (typeof globalThis !== "undefined") {
+  globalThis.__appInternals = {
+    DEFAULT_GROUP_STATE: { ...DEFAULT_GROUP_STATE },
+    getGroupStateStorageKey,
+    sanitizeGroupState,
+    clampPaneWidthPx
+  };
+}
+
 initialize();

@@ -61,6 +61,10 @@ async function flushAsyncWork() {
 
 test("initialization still loads agents when models endpoint fails", async () => {
   const ids = [
+    "layout",
+    "agentsPanel",
+    "chatPanel",
+    "layoutResizer",
     "baseUrlInput",
     "saveBaseUrlBtn",
     "testConnectionBtn",
@@ -68,6 +72,12 @@ test("initialization still loads agents when models endpoint fails", async () =>
     "newAgentBtn",
     "agentForm",
     "agentId",
+    "groupIdentity",
+    "groupModel",
+    "groupGeneration",
+    "groupPrompt",
+    "groupMcp",
+    "groupRuntime",
     "agentName",
     "agentDescription",
     "agentModel",
@@ -92,8 +102,10 @@ test("initialization still loads agents when models endpoint fails", async () =>
     "chatTitle",
     "chatLog",
     "chatForm",
+    "chatAttachBtn",
     "chatMessage",
     "chatImages",
+    "chatAttachmentCount",
     "resetChatBtn",
     "statusBar"
   ];
