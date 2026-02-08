@@ -1,6 +1,8 @@
 const DEFAULT_SYSTEM_PROMPT = "You are a helpful assistant.";
 const APP_CLIENT = typeof globalThis !== "undefined" ? globalThis.AppClient || {} : {};
 const CREATE_AGENT_GROUP_STATE_FEATURE = APP_CLIENT.features?.createAgentGroupStateFeature;
+const CREATE_CHAT_UI_FEATURE = APP_CLIENT.features?.createChatUiFeature;
+const STREAM_SSE_FEATURE = APP_CLIENT.features?.streamSse;
 const GROUP_STATE_PREFIX = APP_CLIENT.uiKeys?.agentFormGroupStatePrefix || "ui.agentForm.groupState.";
 const LEFT_PANE_WIDTH_STORAGE_KEY = APP_CLIENT.uiKeys?.leftPaneWidthPx || "ui.layout.leftPaneWidthPx";
 const NEW_AGENT_GROUP_KEY = APP_CLIENT.uiKeys?.newAgentGroupStateId || "__new__";
@@ -101,6 +103,17 @@ const agentGroupStateFeature =
         nodeGroupKeys: NODE_GROUP_KEYS,
         getFromLocalStorage,
         setToLocalStorage
+      })
+    : null;
+
+const chatUiFeature =
+  typeof CREATE_CHAT_UI_FEATURE === "function"
+    ? CREATE_CHAT_UI_FEATURE({
+        state,
+        elements,
+        setStatus,
+        escapeHtml,
+        maxImageAttachmentBytes: MAX_IMAGE_ATTACHMENT_BYTES
       })
     : null;
 
@@ -701,6 +714,9 @@ function renderMessage(item) {
 }
 
 function isNearBottom(element, threshold = 72) {
+  if (chatUiFeature && typeof chatUiFeature.isNearBottom === "function") {
+    return chatUiFeature.isNearBottom(element, threshold);
+  }
   if (!element) {
     return true;
   }
@@ -712,6 +728,10 @@ function isNearBottom(element, threshold = 72) {
 }
 
 function setScrollButtonVisible(visible) {
+  if (chatUiFeature && typeof chatUiFeature.setScrollButtonVisible === "function") {
+    chatUiFeature.setScrollButtonVisible(visible);
+    return;
+  }
   if (!elements.scrollToBottomBtn) {
     return;
   }
@@ -719,6 +739,10 @@ function setScrollButtonVisible(visible) {
 }
 
 function scrollChatToBottom({ smooth = false } = {}) {
+  if (chatUiFeature && typeof chatUiFeature.scrollChatToBottom === "function") {
+    chatUiFeature.scrollChatToBottom({ smooth });
+    return;
+  }
   if (!elements.chatLog) {
     return;
   }
@@ -732,6 +756,10 @@ function scrollChatToBottom({ smooth = false } = {}) {
 }
 
 function syncChatScrollState() {
+  if (chatUiFeature && typeof chatUiFeature.syncChatScrollState === "function") {
+    chatUiFeature.syncChatScrollState();
+    return;
+  }
   if (!elements.chatLog) {
     return;
   }
@@ -771,6 +799,10 @@ function renderChat(history = [], { showTyping = false, streamPreview = "", forc
 }
 
 function updateAttachmentCount() {
+  if (chatUiFeature && typeof chatUiFeature.updateAttachmentCount === "function") {
+    chatUiFeature.updateAttachmentCount();
+    return;
+  }
   if (!elements.chatAttachmentCount) {
     return;
   }
@@ -783,6 +815,9 @@ function updateAttachmentCount() {
 }
 
 function formatBytes(bytes) {
+  if (chatUiFeature && typeof chatUiFeature.formatBytes === "function") {
+    return chatUiFeature.formatBytes(bytes);
+  }
   const size = Number(bytes);
   if (!Number.isFinite(size) || size <= 0) {
     return "0 B";
@@ -797,6 +832,10 @@ function formatBytes(bytes) {
 }
 
 function revokeAttachmentPreviewUrls() {
+  if (chatUiFeature && typeof chatUiFeature.revokeAttachmentPreviewUrls === "function") {
+    chatUiFeature.revokeAttachmentPreviewUrls();
+    return;
+  }
   if (typeof URL === "undefined" || typeof URL.revokeObjectURL !== "function") {
     state.attachmentPreviewUrls = [];
     return;
@@ -808,6 +847,10 @@ function revokeAttachmentPreviewUrls() {
 }
 
 function syncPendingImagesToInput() {
+  if (chatUiFeature && typeof chatUiFeature.syncPendingImagesToInput === "function") {
+    chatUiFeature.syncPendingImagesToInput();
+    return;
+  }
   if (!elements.chatImages || typeof DataTransfer !== "function") {
     return;
   }
@@ -824,6 +867,10 @@ function syncPendingImagesToInput() {
 }
 
 function renderAttachmentPreview() {
+  if (chatUiFeature && typeof chatUiFeature.renderAttachmentPreview === "function") {
+    chatUiFeature.renderAttachmentPreview();
+    return;
+  }
   if (!elements.chatAttachmentPreview) {
     return;
   }
@@ -862,6 +909,10 @@ function renderAttachmentPreview() {
 }
 
 function mergePendingImages(files) {
+  if (chatUiFeature && typeof chatUiFeature.mergePendingImages === "function") {
+    chatUiFeature.mergePendingImages(files);
+    return;
+  }
   const unique = new Map(
     state.pendingImages.map((file) => [`${file.name}:${file.size}:${file.lastModified}:${file.type}`, file])
   );
@@ -900,6 +951,10 @@ function mergePendingImages(files) {
 }
 
 function removePendingImage(index) {
+  if (chatUiFeature && typeof chatUiFeature.removePendingImage === "function") {
+    chatUiFeature.removePendingImage(index);
+    return;
+  }
   if (!Number.isInteger(index) || index < 0 || index >= state.pendingImages.length) {
     return;
   }
@@ -910,6 +965,10 @@ function removePendingImage(index) {
 }
 
 function clearPendingImages() {
+  if (chatUiFeature && typeof chatUiFeature.clearPendingImages === "function") {
+    chatUiFeature.clearPendingImages();
+    return;
+  }
   state.pendingImages = [];
   if (elements.chatImages) {
     elements.chatImages.value = "";
@@ -920,6 +979,10 @@ function clearPendingImages() {
 }
 
 function autoResizeChatMessage() {
+  if (chatUiFeature && typeof chatUiFeature.autoResizeChatMessage === "function") {
+    chatUiFeature.autoResizeChatMessage();
+    return;
+  }
   if (!elements.chatMessage || !elements.chatMessage.style) {
     return;
   }
@@ -1250,6 +1313,10 @@ async function buildMessageParts(text, files) {
 }
 
 async function* streamSse(body) {
+  if (typeof STREAM_SSE_FEATURE === "function") {
+    yield* STREAM_SSE_FEATURE(body);
+    return;
+  }
   const reader = body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
