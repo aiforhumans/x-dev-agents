@@ -26,6 +26,15 @@ Local web app for creating and testing custom agents backed by the LM Studio API
 - Send multimodal messages (text + image attachments as data URLs).
 - Optional online search context (DuckDuckGo) per agent via `webSearch` toggle.
 - Persist agent definitions, chat history, response chain IDs, and stats in `data/`.
+- First-class Content Pipelines persisted in `data/pipelines.json`:
+  - reusable pipeline templates with ordered stages
+  - stage-to-agent role mapping (`agentsByRole`)
+  - per-stage tooling policy (`toolsPolicy`)
+  - target deliverables (`outputs`)
+- Pipeline Runs persisted in `data/runs.json`:
+  - run lifecycle status (`queued`, `running`, `completed`, `failed`, `cancelled`)
+  - run inputs (`topic`, `seedLinks`, `brandVoice`, `targetPlatforms`)
+  - run artifacts, evidence snapshots/citations, logs, and metrics
 - Render assistant output types from LM Studio:
   - `message`
   - `reasoning` (collapsible)
@@ -80,6 +89,47 @@ Open `http://localhost:3000`.
 - Data files:
   - `data/config.json`
   - `data/agents.json`
+  - `data/pipelines.json`
+  - `data/runs.json`
+
+## Content Pipelines API
+
+- Pipelines:
+  - `GET /api/pipelines`
+  - `GET /api/pipelines/:id`
+  - `POST /api/pipelines` (create or update when `id` is supplied)
+  - `PUT /api/pipelines/:id`
+  - `DELETE /api/pipelines/:id`
+  - `POST /api/pipelines/:id/run` (starts async orchestration, returns `{ runId }`)
+- Runs:
+  - `GET /api/runs` (optional query: `pipelineId`, `status`, `limit`)
+  - `GET /api/runs/:runId`
+  - `GET /api/runs/:runId/stream` (SSE orchestration events)
+  - `POST /api/runs`
+  - `PUT /api/runs/:runId`
+  - `POST /api/runs/:runId/logs`
+  - `DELETE /api/runs/:runId`
+
+### Run Stream Event Types
+
+- `run_started`
+- `stage_started`
+- `assistant_delta`
+- `tool_call`
+- `tool_result`
+- `artifact_written`
+- `stage_completed`
+- `run_completed`
+- `run_failed`
+
+### Canonical Orchestration Stages
+
+- `discovery` -> writes `evidence.json`, `reading_notes.md`
+- `synthesis` -> writes `foundation_report.md`, `claims_table.json`
+- `draft` -> writes `draft_longform.md`
+- `adapt` -> writes `platform_pack.md`
+- `style` -> writes `platform_pack_styled.md`
+- `audit` -> writes `fact_audit.md`, `final_pack.md`
 
 ## Chat Behavior Notes
 
