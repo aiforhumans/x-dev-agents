@@ -20,12 +20,7 @@ const { createLmStudioClient, parseJsonResponse } = require("./src/server/servic
 const { parseSseBlock } = require("./src/server/services/lmstudioStreamParser");
 const { openSse, sendEvent, closeSse } = require("./src/server/sse/sseHelpers");
 const { createOrchestrator } = require("./src/server/services/orchestrator/orchestrator");
-const { registerSystemRoutes } = require("./src/server/routes/systemRoutes");
-const { registerAgentRoutes } = require("./src/server/routes/agentRoutes");
-const { registerMcpRoutes } = require("./src/server/routes/mcpRoutes");
-const { registerPipelineRoutes } = require("./src/server/routes/pipelineRoutes");
-const { registerRunRoutes } = require("./src/server/routes/runRoutes");
-const { registerChatRoutes } = require("./src/server/routes/chatRoutes");
+const { registerApiRoutes } = require("./src/server/routes");
 const { createErrorHandler } = require("./src/server/middleware/errorHandler");
 const {
   ensureConfigFile: ensureConfigFileInStore,
@@ -1680,95 +1675,92 @@ const orchestration = createOrchestrator({
   searchOnline
 });
 
-registerSystemRoutes(app, {
-  getConfig: () => config,
-  getNativeApiBaseUrl,
-  getAgents: () => agents,
-  getPipelines: () => pipelines,
-  getRuns: () => runs,
-  normalizeBaseUrl,
-  saveConfig,
-  lmStudioJsonRequest
-});
-
-registerMcpRoutes(app, {
-  sanitizeIntegrations,
-  buildRequestError,
-  lmStudioJsonRequest,
-  summarizeOutputTypes
-});
-
-registerAgentRoutes(app, {
-  getAgents: () => agents,
-  saveAgents,
-  sanitizeAgent,
-  agentToClient,
-  buildRequestError,
-  randomUUID
-});
-
-registerPipelineRoutes(app, {
-  getPipelines: () => pipelines,
-  findPipeline,
-  pipelineToClient,
-  sanitizePipeline,
-  sanitizeTrimmedString,
-  buildRequestError,
-  savePipelines,
-  randomUUID,
-  orchestration,
-  sanitizeRunCreate,
-  getRuns: () => runs,
-  setRuns,
-  runsLimit: RUNS_LIMIT,
-  saveRuns,
-  activePipelineRuns,
-  findRun
-});
-
-registerRunRoutes(app, {
-  getRuns: () => runs,
-  setRuns,
-  findRun,
-  findPipeline,
-  runToClient,
-  sanitizeTrimmedString,
-  clamp,
-  toInteger,
-  runStatusValues: RUN_STATUS_VALUES,
-  buildRequestError,
-  openSse,
-  writeSse,
-  closeSse,
-  orchestration,
-  runStreamHeartbeatMs: RUN_STREAM_HEARTBEAT_MS,
-  runStreamSubscribers,
-  sanitizeRunCreate,
-  runsLimit: RUNS_LIMIT,
-  randomUUID,
-  saveRuns,
-  sanitizeRunUpdate,
-  sanitizeRunLogs
-});
-
-registerChatRoutes(app, {
-  findAgent,
-  buildRequestError,
-  resetConversation,
-  saveAgents,
-  normalizeMessageParts,
-  summarizeUserInput,
-  enrichMessageWithSearch,
-  buildChatRequest,
-  lmStudioJsonRequest,
-  applyChatResult,
-  lmStudioStreamRequest,
-  parseJsonResponse,
-  writeSse,
-  closeSse,
-  openSse,
-  parseSseBlock,
-  toBoolean
+registerApiRoutes(app, {
+  system: {
+    getConfig: () => config,
+    getNativeApiBaseUrl,
+    getAgents: () => agents,
+    getPipelines: () => pipelines,
+    getRuns: () => runs,
+    normalizeBaseUrl,
+    saveConfig,
+    lmStudioJsonRequest
+  },
+  mcp: {
+    sanitizeIntegrations,
+    buildRequestError,
+    lmStudioJsonRequest,
+    summarizeOutputTypes
+  },
+  agents: {
+    getAgents: () => agents,
+    saveAgents,
+    sanitizeAgent,
+    agentToClient,
+    buildRequestError,
+    randomUUID
+  },
+  pipelines: {
+    getPipelines: () => pipelines,
+    findPipeline,
+    pipelineToClient,
+    sanitizePipeline,
+    sanitizeTrimmedString,
+    buildRequestError,
+    savePipelines,
+    randomUUID,
+    orchestration,
+    sanitizeRunCreate,
+    getRuns: () => runs,
+    setRuns,
+    runsLimit: RUNS_LIMIT,
+    saveRuns,
+    activePipelineRuns,
+    findRun
+  },
+  runs: {
+    getRuns: () => runs,
+    setRuns,
+    findRun,
+    findPipeline,
+    runToClient,
+    sanitizeTrimmedString,
+    clamp,
+    toInteger,
+    runStatusValues: RUN_STATUS_VALUES,
+    buildRequestError,
+    openSse,
+    writeSse,
+    closeSse,
+    orchestration,
+    runStreamHeartbeatMs: RUN_STREAM_HEARTBEAT_MS,
+    runStreamSubscribers,
+    sanitizeRunCreate,
+    runsLimit: RUNS_LIMIT,
+    randomUUID,
+    saveRuns,
+    sanitizeRunUpdate,
+    sanitizeRunLogs
+  },
+  chat: {
+    findAgent,
+    buildRequestError,
+    resetConversation,
+    saveAgents,
+    normalizeMessageParts,
+    summarizeUserInput,
+    enrichMessageWithSearch,
+    buildChatRequest,
+    lmStudioJsonRequest,
+    applyChatResult,
+    lmStudioStreamRequest,
+    parseJsonResponse,
+    writeSse,
+    closeSse,
+    openSse,
+    parseSseBlock,
+    toBoolean
+  }
 });
 
 app.get("*", (req, res) => {
