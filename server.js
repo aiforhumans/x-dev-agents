@@ -19,6 +19,7 @@ const runtimeState = require("./src/server/state/runtimeState");
 const { createLmStudioClient, parseJsonResponse } = require("./src/server/services/lmstudioClient");
 const { parseSseBlock } = require("./src/server/services/lmstudioStreamParser");
 const { openSse, sendEvent, closeSse } = require("./src/server/sse/sseHelpers");
+const { createOrchestrator } = require("./src/server/services/orchestrator/orchestrator");
 const {
   ensureConfigFile: ensureConfigFileInStore,
   loadConfig: loadConfigFromStore,
@@ -1631,690 +1632,6 @@ function writeSse(res, event, data) {
   sendEvent(res, { type: event, data });
 }
 
-function stageById(stageId) {
-  return CANONICAL_PIPELINE_STAGES.find((stage) => stage.stageId === stageId) || null;
-}
-
-function setRunStageStatus(run, stageId, status, patch = {}) {
-  if (!run?.stageState || !run.stageState[stageId]) {
-    return;
-  }
-  const entry = run.stageState[stageId];
-  entry.status = status;
-  if (status === "running") {
-    entry.startedAt = entry.startedAt || new Date().toISOString();
-  }
-  if (status === "completed" || status === "failed") {
-    entry.completedAt = new Date().toISOString();
-  }
-  if (patch.agentId !== undefined) {
-    entry.agentId = patch.agentId;
-  }
-  if (patch.error !== undefined) {
-    entry.error = patch.error;
-  }
-  if (patch.stats !== undefined) {
-    entry.stats = patch.stats;
-  }
-  if (Array.isArray(patch.artifacts)) {
-    entry.artifacts = patch.artifacts;
-  }
-}
-
-function normalizeToolEventPayload(event, data) {
-  if (!data || typeof data !== "object") {
-    return null;
-  }
-
-  const payload = {
-    event,
-    type: String(data.type || event || "").toLowerCase()
-  };
-
-  if (data.tool) {
-    payload.tool = data.tool;
-  }
-  if (data.arguments !== undefined) {
-    payload.arguments = data.arguments;
-  }
-  if (data.output !== undefined) {
-    payload.output = data.output;
-  }
-  if (data.provider_info !== undefined) {
-    payload.providerInfo = data.provider_info;
-  } else if (data.providerInfo !== undefined) {
-    payload.providerInfo = data.providerInfo;
-  }
-
-  return payload;
-}
-
-function appendRunLog(run, level, message, { stageId = null } = {}) {
-  run.logs.push({
-    at: new Date().toISOString(),
-    level,
-    message: String(message || ""),
-    ...(stageId ? { stageId } : {})
-  });
-  run.logs = run.logs.slice(-5000);
-}
-
-function pushRunArtifact(run, artifact) {
-  run.artifacts.push(artifact);
-  run.artifacts = run.artifacts.slice(-1000);
-}
-
-function buildArtifact(run, { stageId, name, content, type = "text/markdown", metadata = null }) {
-  const now = new Date().toISOString();
-  const ext = String(name || "").split(".").pop()?.toLowerCase();
-  const artifactType = ext === "json" ? "application/json" : type;
-
-  return {
-    artifactId: randomUUID(),
-    stageId,
-    type: artifactType,
-    title: name,
-    uri: `run://${run.runId}/${name}`,
-    content: String(content || ""),
-    createdAt: now,
-    updatedAt: now,
-    ...(metadata && typeof metadata === "object" ? { metadata } : {})
-  };
-}
-
-function extractJsonObjectFromText(text) {
-  const raw = String(text || "").trim();
-  if (!raw) {
-    return null;
-  }
-
-  try {
-    return JSON.parse(raw);
-  } catch {
-    // continue
-  }
-
-  const fenceMatch = raw.match(/```json\s*([\s\S]*?)```/i);
-  if (fenceMatch && fenceMatch[1]) {
-    try {
-      return JSON.parse(fenceMatch[1].trim());
-    } catch {
-      // continue
-    }
-  }
-
-  const objectMatch = raw.match(/\{[\s\S]*\}/);
-  if (objectMatch && objectMatch[0]) {
-    try {
-      return JSON.parse(objectMatch[0]);
-    } catch {
-      // continue
-    }
-  }
-
-  const arrayMatch = raw.match(/\[[\s\S]*\]/);
-  if (arrayMatch && arrayMatch[0]) {
-    try {
-      return JSON.parse(arrayMatch[0]);
-    } catch {
-      // continue
-    }
-  }
-
-  return null;
-}
-
-function agentSupportsSearxLikeRetrieval(agent) {
-  const integrations = Array.isArray(agent?.integrations) ? agent.integrations : [];
-  return integrations.some((entry) => {
-    if (typeof entry === "string") {
-      return /searx|search|retrieval/i.test(entry);
-    }
-    if (!entry || typeof entry !== "object") {
-      return false;
-    }
-    const id = String(entry.id || entry.server_label || entry.serverLabel || "").trim();
-    const url = String(entry.server_url || entry.serverUrl || "").trim();
-    return /searx|search|retrieval/i.test(id) || /searx/i.test(url);
-  });
-}
-
-function getRunSubscribers(runId) {
-  if (!runStreamSubscribers.has(runId)) {
-    runStreamSubscribers.set(runId, new Set());
-  }
-  return runStreamSubscribers.get(runId);
-}
-
-function streamRunEvent(run, event, payload = {}) {
-  const subscribers = runStreamSubscribers.get(run.runId);
-  if (!subscribers || !subscribers.size) {
-    return;
-  }
-
-  const data = {
-    runId: run.runId,
-    pipelineId: run.pipelineId,
-    at: new Date().toISOString(),
-    ...payload
-  };
-
-  for (const res of subscribers) {
-    try {
-      writeSse(res, event, data);
-    } catch {
-      // Ignore write failures; connection cleanup handles stale clients.
-    }
-  }
-}
-
-function closeRunStream(runId) {
-  const subscribers = runStreamSubscribers.get(runId);
-  if (!subscribers) {
-    return;
-  }
-  for (const res of subscribers) {
-    try {
-      closeSse(res);
-    } catch {
-      // Ignore.
-    }
-  }
-  runStreamSubscribers.delete(runId);
-}
-
-async function saveRunsAndBroadcast(run, event = null, payload = null) {
-  await saveRuns();
-  if (event) {
-    streamRunEvent(run, event, payload || {});
-  }
-}
-
-function createPromptForStage({ stageId, topic, brandVoice, targetPlatforms, priorArtifacts }) {
-  const artifactsByName = Object.fromEntries(
-    (priorArtifacts || []).map((artifact) => [String(artifact.title || ""), String(artifact.content || "")])
-  );
-
-  if (stageId === "discovery") {
-    return [
-      `Topic: ${topic}`,
-      "Goal: Build an evidence pack with grounded sources.",
-      "Return concise research output plus source-backed notes.",
-      "Include clearly structured findings and references."
-    ].join("\n");
-  }
-
-  if (stageId === "synthesis") {
-    return [
-      `Topic: ${topic}`,
-      "Use these inputs to produce synthesis artifacts:",
-      `reading_notes.md:\n${artifactsByName["reading_notes.md"] || ""}`,
-      `evidence.json:\n${artifactsByName["evidence.json"] || "[]"}`,
-      "Output key claims with traceable source links, risks/limitations, and guardrails."
-    ].join("\n\n");
-  }
-
-  if (stageId === "draft") {
-    return [
-      `Topic: ${topic}`,
-      `foundation_report.md:\n${artifactsByName["foundation_report.md"] || ""}`,
-      `claims_table.json:\n${artifactsByName["claims_table.json"] || "[]"}`,
-      "Produce a strong long-form draft."
-    ].join("\n\n");
-  }
-
-  if (stageId === "adapt") {
-    return [
-      `Topic: ${topic}`,
-      `Target platforms: ${(targetPlatforms || []).join(", ") || "linkedin, x, instagram, exec-summary"}`,
-      `draft_longform.md:\n${artifactsByName["draft_longform.md"] || ""}`,
-      "Adapt into platform-specific variants."
-    ].join("\n\n");
-  }
-
-  if (stageId === "style") {
-    return [
-      `Topic: ${topic}`,
-      `Brand voice: ${brandVoice || "Use professional and clear tone."}`,
-      `platform_pack.md:\n${artifactsByName["platform_pack.md"] || ""}`,
-      "Apply consistent brand style and formatting."
-    ].join("\n\n");
-  }
-
-  if (stageId === "audit") {
-    return [
-      `Topic: ${topic}`,
-      `platform_pack_styled.md:\n${artifactsByName["platform_pack_styled.md"] || ""}`,
-      `claims_table.json:\n${artifactsByName["claims_table.json"] || "[]"}`,
-      `evidence.json:\n${artifactsByName["evidence.json"] || "[]"}`,
-      "Audit factual grounding and produce final publishable pack."
-    ].join("\n\n");
-  }
-
-  return `Topic: ${topic}`;
-}
-
-function resolveStageToolsPolicy(run, pipeline, stageId) {
-  const runPolicy = isPlainObject(run?.toolsPolicy) ? run.toolsPolicy : null;
-  const pipelinePolicy = isPlainObject(pipeline?.toolsPolicy) ? pipeline.toolsPolicy : null;
-  const rootPolicy = runPolicy || pipelinePolicy || {};
-  const defaultPolicy = isPlainObject(rootPolicy.default) ? rootPolicy.default : {};
-  const stagePolicyRaw = isPlainObject(rootPolicy.byStage?.[stageId]) ? rootPolicy.byStage[stageId] : {};
-
-  return {
-    allowWebSearch:
-      stagePolicyRaw.allowWebSearch !== undefined
-        ? toBoolean(stagePolicyRaw.allowWebSearch, false)
-        : toBoolean(defaultPolicy.allowWebSearch, false),
-    allowedTools: sanitizeStringArray(stagePolicyRaw.allowedTools ?? defaultPolicy.allowedTools, {
-      maxItems: 200,
-      maxLength: 200
-    }),
-    allowedIntegrations: sanitizeStringArray(stagePolicyRaw.allowedIntegrations ?? defaultPolicy.allowedIntegrations, {
-      maxItems: 200,
-      maxLength: 320
-    })
-  };
-}
-
-function applyIntegrationPolicy(agent, stagePolicy) {
-  if (!stagePolicy.allowedIntegrations.length) {
-    return agent;
-  }
-
-  const allowed = new Set(stagePolicy.allowedIntegrations.map((item) => String(item || "").trim()).filter(Boolean));
-  const integrations = (Array.isArray(agent.integrations) ? agent.integrations : []).filter((integration) => {
-    if (typeof integration === "string") {
-      return allowed.has(integration);
-    }
-    if (!integration || typeof integration !== "object") {
-      return false;
-    }
-    const key = String(integration.id || integration.server_label || integration.serverLabel || "").trim();
-    return key ? allowed.has(key) : false;
-  });
-
-  return {
-    ...agent,
-    integrations
-  };
-}
-
-function composeStagePayload(agent, stagePrompt, { reset = true } = {}) {
-  const parts = [{ type: "message", content: stagePrompt }];
-  return buildChatRequest(agent, parts, { stream: true, reset });
-}
-
-async function executeLmStudioStage({
-  run,
-  pipeline,
-  stageId,
-  agent,
-  promptText,
-  allowSearchFallback = false
-}) {
-  const stagePolicy = resolveStageToolsPolicy(run, pipeline, stageId);
-  const agentWithPolicy = applyIntegrationPolicy(agent, stagePolicy);
-  const payload = composeStagePayload(agentWithPolicy, promptText, { reset: true });
-  let enrichedInputParts = [{ type: "message", content: promptText }];
-  if (
-    allowSearchFallback &&
-    stagePolicy.allowWebSearch &&
-    !agentSupportsSearxLikeRetrieval(agentWithPolicy) &&
-    toBoolean(agentWithPolicy.webSearch, true)
-  ) {
-    enrichedInputParts = await enrichMessageWithSearch({ webSearch: true }, enrichedInputParts);
-    payload.input = enrichedInputParts.length === 1 ? enrichedInputParts[0].content : enrichedInputParts;
-  }
-  payload.stream = true;
-
-  const upstream = await lmStudioStreamRequest({
-    endpoint: "/chat",
-    body: payload
-  });
-
-  if (!upstream.ok) {
-    const payloadError = await parseJsonResponse(upstream);
-    const message =
-      payloadError?.error?.message ||
-      payloadError?.error ||
-      payloadError?.message ||
-      `LM Studio streaming request failed (${upstream.status}).`;
-    throw buildRequestError(upstream.status, String(message));
-  }
-  if (!upstream.body) {
-    throw buildRequestError(502, "No stream body returned by LM Studio.");
-  }
-
-  const decoder = new TextDecoder();
-  let buffer = "";
-  let finalResult = null;
-  let assistantText = "";
-  const toolEvents = [];
-
-  for await (const chunk of upstream.body) {
-    buffer += decoder.decode(chunk, { stream: true });
-
-    while (true) {
-      const boundaryMatch = buffer.match(/\r?\n\r?\n/);
-      if (!boundaryMatch || boundaryMatch.index === undefined) {
-        break;
-      }
-      const boundaryIndex = boundaryMatch.index;
-      const boundaryLength = boundaryMatch[0].length;
-      const block = buffer.slice(0, boundaryIndex).trim();
-      buffer = buffer.slice(boundaryIndex + boundaryLength);
-      if (!block) {
-        continue;
-      }
-
-      const parsed = parseSseBlock(block);
-      if (!parsed) {
-        continue;
-      }
-
-      const { event, data } = parsed;
-      if (event === "chat.end" && data && typeof data === "object" && data.result) {
-        finalResult = data.result;
-      } else if (event === "message.delta" && data && typeof data === "object") {
-        const delta = String(data.content || "");
-        if (delta) {
-          assistantText += delta;
-          streamRunEvent(run, "assistant_delta", { stageId, delta });
-        }
-      } else if (/tool_call|tool\.call|tool_call\.delta/i.test(event)) {
-        const payloadEvent = normalizeToolEventPayload("tool_call", data);
-        if (payloadEvent) {
-          toolEvents.push(payloadEvent);
-          streamRunEvent(run, "tool_call", { stageId, ...payloadEvent });
-        }
-      } else if (/tool_result|tool\.result|tool_output/i.test(event)) {
-        const payloadEvent = normalizeToolEventPayload("tool_result", data);
-        if (payloadEvent) {
-          toolEvents.push(payloadEvent);
-          streamRunEvent(run, "tool_result", { stageId, ...payloadEvent });
-        }
-      }
-    }
-  }
-
-  if (!finalResult) {
-    finalResult = {
-      output: [{ type: "message", content: assistantText }],
-      response_id: null,
-      stats: null
-    };
-  }
-
-  if (!assistantText) {
-    const outputItems = Array.isArray(finalResult.output) ? finalResult.output : [];
-    assistantText = outputItems
-      .filter((item) => String(item?.type || "").toLowerCase() === "message")
-      .map((item) => String(item?.content || ""))
-      .join("");
-  }
-
-  const outputItems = Array.isArray(finalResult.output) ? finalResult.output : [];
-  for (const item of outputItems) {
-    const type = String(item?.type || "").trim().toLowerCase();
-    if (type === "tool_call") {
-      const payloadEvent = normalizeToolEventPayload("tool_call", item);
-      if (payloadEvent) {
-        toolEvents.push(payloadEvent);
-        streamRunEvent(run, "tool_call", { stageId, ...payloadEvent });
-      }
-    }
-    if (type === "tool_result") {
-      const payloadEvent = normalizeToolEventPayload("tool_result", item);
-      if (payloadEvent) {
-        toolEvents.push(payloadEvent);
-        streamRunEvent(run, "tool_result", { stageId, ...payloadEvent });
-      }
-    }
-  }
-
-  return {
-    prompt: promptText,
-    responseText: assistantText,
-    result: finalResult,
-    toolEvents,
-    input: enrichedInputParts
-  };
-}
-
-async function persistStageArtifacts(run, stageId, stageResult) {
-  const stage = stageById(stageId);
-  const artifactNames = stage?.defaultArtifactNames || [];
-  const artifactsCreated = [];
-  const text = String(stageResult?.responseText || "");
-  const now = new Date().toISOString();
-
-  if (stageId === "discovery") {
-    let evidenceJson = extractJsonObjectFromText(text);
-    const ddgFallback = [];
-    if (!evidenceJson) {
-      try {
-        const query = run.topic;
-        const results = await searchOnline(query);
-        for (const item of results) {
-          ddgFallback.push({
-            sourceId: randomUUID(),
-            title: item.title || "",
-            url: item.url || "",
-            snippet: item.snippet || "",
-            snapshot: item.snippet || "",
-            retrievedAt: now
-          });
-        }
-      } catch {
-        // ignore
-      }
-      evidenceJson = ddgFallback;
-    }
-    if (!Array.isArray(evidenceJson)) {
-      evidenceJson = [evidenceJson].filter(Boolean);
-    }
-
-    run.evidence = sanitizeRunEvidence(evidenceJson);
-    const evidenceArtifact = buildArtifact(run, {
-      stageId,
-      name: artifactNames[0] || "evidence.json",
-      content: JSON.stringify(run.evidence, null, 2),
-      type: "application/json"
-    });
-    const notesArtifact = buildArtifact(run, {
-      stageId,
-      name: artifactNames[1] || "reading_notes.md",
-      content: text || "No reading notes generated."
-    });
-    artifactsCreated.push(evidenceArtifact, notesArtifact);
-  } else if (stageId === "synthesis") {
-    const claimsTable = extractJsonObjectFromText(text) || [];
-    artifactsCreated.push(
-      buildArtifact(run, {
-        stageId,
-        name: artifactNames[0] || "foundation_report.md",
-        content: text || "No foundation report generated."
-      }),
-      buildArtifact(run, {
-        stageId,
-        name: artifactNames[1] || "claims_table.json",
-        content: JSON.stringify(Array.isArray(claimsTable) ? claimsTable : [claimsTable], null, 2),
-        type: "application/json"
-      })
-    );
-  } else if (stageId === "draft") {
-    artifactsCreated.push(
-      buildArtifact(run, {
-        stageId,
-        name: artifactNames[0] || "draft_longform.md",
-        content: text || "No draft generated."
-      })
-    );
-  } else if (stageId === "adapt") {
-    artifactsCreated.push(
-      buildArtifact(run, {
-        stageId,
-        name: artifactNames[0] || "platform_pack.md",
-        content: text || "No platform pack generated."
-      })
-    );
-  } else if (stageId === "style") {
-    artifactsCreated.push(
-      buildArtifact(run, {
-        stageId,
-        name: artifactNames[0] || "platform_pack_styled.md",
-        content: text || "No styled pack generated."
-      })
-    );
-  } else if (stageId === "audit") {
-    artifactsCreated.push(
-      buildArtifact(run, {
-        stageId,
-        name: artifactNames[0] || "fact_audit.md",
-        content: text || "No fact audit generated."
-      }),
-      buildArtifact(run, {
-        stageId,
-        name: artifactNames[1] || "final_pack.md",
-        content: text || "No final pack generated."
-      })
-    );
-  }
-
-  const stageEntry = run.stageState[stageId];
-  stageEntry.artifacts = artifactsCreated.map((artifact) => artifact.title);
-  for (const artifact of artifactsCreated) {
-    pushRunArtifact(run, artifact);
-    streamRunEvent(run, "artifact_written", {
-      stageId,
-      artifact: {
-        artifactId: artifact.artifactId,
-        title: artifact.title,
-        uri: artifact.uri,
-        type: artifact.type
-      }
-    });
-  }
-}
-
-async function runPipelineOrchestration(runId) {
-  const run = findRun(runId);
-  if (!run) {
-    return;
-  }
-  const pipeline = findPipeline(run.pipelineId);
-  if (!pipeline) {
-    run.status = "failed";
-    run.failedStage = "unknown";
-    run.errorMessage = "Pipeline not found.";
-    run.errorAt = new Date().toISOString();
-    run.updatedAt = run.errorAt;
-    await saveRunsAndBroadcast(run, "run_failed", {
-      stageId: run.failedStage,
-      error: run.errorMessage
-    });
-    closeRunStream(run.runId);
-    return;
-  }
-
-  run.status = "running";
-  run.updatedAt = new Date().toISOString();
-  appendRunLog(run, "info", "Pipeline run started.");
-  await saveRunsAndBroadcast(run, "run_started", {
-    status: run.status,
-    stageState: run.stageState
-  });
-
-  const stageList = pipeline.stages
-    .filter((stage) => stage.enabled !== false)
-    .sort((a, b) => a.order - b.order);
-
-  try {
-    for (const stage of stageList) {
-      const stageId = stage.stageId;
-      const agentId = pipeline.agentsByRole?.[stage.role];
-      const agent = findAgent(agentId);
-      if (!agent) {
-        throw buildRequestError(400, `Stage ${stageId} references unknown agent: ${agentId || "none"}`);
-      }
-
-      setRunStageStatus(run, stageId, "running", { agentId });
-      run.updatedAt = new Date().toISOString();
-      appendRunLog(run, "info", `Stage started: ${stageId}`, { stageId });
-      await saveRunsAndBroadcast(run, "stage_started", {
-        stageId,
-        agentId,
-        stage: run.stageState[stageId]
-      });
-
-      const priorStageArtifacts = run.artifacts;
-      const promptText = createPromptForStage({
-        stageId,
-        topic: run.topic,
-        brandVoice: run.brandVoice,
-        targetPlatforms: run.targetPlatforms,
-        priorArtifacts: priorStageArtifacts
-      });
-
-      const stageResult = await executeLmStudioStage({
-        run,
-        pipeline,
-        stageId,
-        agent,
-        promptText,
-        allowSearchFallback: stageId === "discovery"
-      });
-
-      run.metrics = run.metrics || {};
-      run.metrics.perStage = run.metrics.perStage || {};
-      run.metrics.perStage[stageId] = sanitizeStats(stageResult.result?.stats) || null;
-      setRunStageStatus(run, stageId, "completed", {
-        stats: run.metrics.perStage[stageId],
-        error: null
-      });
-
-      await persistStageArtifacts(run, stageId, stageResult);
-      run.updatedAt = new Date().toISOString();
-      appendRunLog(run, "info", `Stage completed: ${stageId}`, { stageId });
-      await saveRunsAndBroadcast(run, "stage_completed", {
-        stageId,
-        stage: run.stageState[stageId]
-      });
-    }
-
-    run.status = "completed";
-    run.updatedAt = new Date().toISOString();
-    run.failedStage = null;
-    run.errorMessage = null;
-    run.errorAt = null;
-    appendRunLog(run, "info", "Pipeline run completed.");
-    await saveRunsAndBroadcast(run, "run_completed", {
-      status: run.status
-    });
-    closeRunStream(run.runId);
-  } catch (error) {
-    const activeStage =
-      Object.values(run.stageState || {}).find((stageEntry) => stageEntry.status === "running")?.stageId || "unknown";
-    setRunStageStatus(run, activeStage, "failed", {
-      error: error.message || "Stage execution failed."
-    });
-    run.status = "failed";
-    run.failedStage = activeStage;
-    run.errorMessage = error.message || "Pipeline run failed.";
-    run.errorAt = new Date().toISOString();
-    run.updatedAt = run.errorAt;
-    appendRunLog(run, "error", run.errorMessage, { stageId: activeStage });
-    await saveRunsAndBroadcast(run, "run_failed", {
-      stageId: activeStage,
-      error: run.errorMessage
-    });
-    closeRunStream(run.runId);
-  } finally {
-    activePipelineRuns.delete(runId);
-  }
-}
-
 function findAgent(agentId) {
   return agents.find((agent) => agent.id === agentId) || null;
 }
@@ -2327,21 +1644,29 @@ function findRun(runId) {
   return runs.find((run) => run.runId === runId) || null;
 }
 
-function ensurePipelineReadyForRun(pipeline) {
-  if (!pipeline) {
-    throw buildRequestError(404, "Pipeline not found.");
-  }
-
-  for (const stage of CANONICAL_PIPELINE_STAGES) {
-    const mappedAgentId = pipeline.agentsByRole?.[stage.role];
-    if (!mappedAgentId) {
-      throw buildRequestError(400, `Pipeline missing agentsByRole.${stage.role}.`);
-    }
-    if (!findAgent(mappedAgentId)) {
-      throw buildRequestError(400, `Pipeline stage ${stage.stageId} references unknown agent: ${mappedAgentId}`);
-    }
-  }
-}
+const orchestration = createOrchestrator({
+  canonicalStages: CANONICAL_PIPELINE_STAGES,
+  runStreamSubscribers,
+  activePipelineRuns,
+  saveRuns,
+  findRun,
+  findPipeline,
+  findAgent,
+  parseSseBlock,
+  parseJsonResponse,
+  lmStudioStreamRequest,
+  buildRequestError,
+  sanitizeStats,
+  sanitizeRunEvidence,
+  sanitizeStringArray,
+  isPlainObject,
+  toBoolean,
+  buildChatRequest,
+  enrichMessageWithSearch,
+  randomUUID,
+  writeSse,
+  searchOnline
+});
 
 app.get("/api/health", (req, res) => {
   res.json({
@@ -2603,7 +1928,7 @@ app.delete("/api/pipelines/:id", async (req, res, next) => {
 app.post("/api/pipelines/:id/run", async (req, res, next) => {
   try {
     const pipeline = findPipeline(req.params.id);
-    ensurePipelineReadyForRun(pipeline);
+    orchestration.ensurePipelineReadyForRun(pipeline);
 
     const runInput = sanitizeRunCreate({
       ...req.body,
@@ -2627,7 +1952,7 @@ app.post("/api/pipelines/:id/run", async (req, res, next) => {
     await saveRuns();
 
     if (!activePipelineRuns.has(run.runId)) {
-      const execution = runPipelineOrchestration(run.runId).catch((error) => {
+      const execution = orchestration.runPipelineOrchestration(run.runId).catch((error) => {
         const currentRun = findRun(run.runId);
         if (!currentRun) {
           return;
@@ -2637,11 +1962,11 @@ app.post("/api/pipelines/:id/run", async (req, res, next) => {
         currentRun.errorMessage = error.message || "Pipeline orchestration failed.";
         currentRun.errorAt = new Date().toISOString();
         currentRun.updatedAt = currentRun.errorAt;
-        appendRunLog(currentRun, "error", currentRun.errorMessage);
-        saveRunsAndBroadcast(currentRun, "run_failed", {
+        orchestration.appendRunLog(currentRun, "error", currentRun.errorMessage);
+        orchestration.saveRunsAndBroadcast(currentRun, "run_failed", {
           stageId: currentRun.failedStage,
           error: currentRun.errorMessage
-        }).finally(() => closeRunStream(currentRun.runId));
+        }).finally(() => orchestration.closeRunStream(currentRun.runId));
       });
       activePipelineRuns.set(run.runId, execution);
     }
@@ -2720,7 +2045,7 @@ app.get("/api/runs/:runId/stream", (req, res, next) => {
       return;
     }
 
-    const subscribers = getRunSubscribers(run.runId);
+    const subscribers = orchestration.getRunSubscribers(run.runId);
     subscribers.add(res);
 
     writeSse(res, "run_started", {
@@ -3076,7 +2401,7 @@ module.exports = {
     buildInitialStageState,
     runToClient,
     pipelineToClient,
-    ensurePipelineReadyForRun,
+    ensurePipelineReadyForRun: orchestration.ensurePipelineReadyForRun,
     setTestState(nextState = {}) {
       if (Array.isArray(nextState.agents)) {
         agents = nextState.agents;
